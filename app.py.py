@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import io
 import os
-import unicodedata
 
 # 1. Cấu hình trang
 st.set_page_config(
@@ -11,7 +10,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Thêm CSS tùy chỉnh giao diện
+# Custom CSS cho giao diện
 st.markdown("""
     <style>
     .main-header {font-size: 26px; font-weight: bold; color: #d70018; margin-bottom: 20px;}
@@ -24,7 +23,56 @@ st.markdown("""
 
 st.markdown("<div class='main-header'>📊 CELLPHONES AUDIT & TRACKING DASHBOARD TỔNG QUAN</div>", unsafe_allow_html=True)
 
-# 2. Nạp dữ liệu File Raw / Tracking
+# 2. Danh sách Master 35 Nhân sự cố định theo đúng mẫu
+TARGET_35_NV_MASTER = [
+    {"Tên": "NGUYỄN CÔNG TUẤN", "Mã cửa hàng": "CPS-HNO-CGI-126HTM", "Leader": "Vũ Hoài Nam"},
+    {"Tên": "NGUYỄN HỮU THÀNH", "Mã cửa hàng": "CPS-HNO-CGI-160NKT", "Leader": "Vũ Hoài Nam"},
+    {"Tên": "NGUYỄN PHƯƠNG THẢO", "Mã cửa hàng": "CPS-HNO-CGI-310CG", "Leader": "Vũ Hoài Nam"},
+    {"Tên": "LÊ VĂN THIÊN", "Mã cửa hàng": "CPS-HNO-CGI-310CG", "Leader": "Vũ Hoài Nam"},
+    {"Tên": "PHẠM DUY NAM", "Mã cửa hàng": "CPS-HNO-NTL-50LQD", "Leader": "Vũ Hoài Nam"},
+    {"Tên": "NGUYỄN QUỐC TRƯỜNG", "Mã cửa hàng": "CPS-HNO-PDI-248HTM", "Leader": "Vũ Hoài Nam"},
+    {"Tên": "VŨ QUANG HUY", "Mã cửa hàng": "CPS-HNO-PDI-248HTM", "Leader": "Vũ Hoài Nam"},
+    {"Tên": "ĐỖ TRƯỜNG GIANG", "Mã cửa hàng": "CPS-HNO-THO-126LLQ", "Leader": "Vũ Hoài Nam"},
+    {"Tên": "ĐẠI LÊ MINH SƠN", "Mã cửa hàng": "CPS-HNO-THO-126LLQ", "Leader": "Vũ Hoài Nam"},
+    {"Tên": "TRẦN THỊ LAN ANH", "Mã cửa hàng": "CPS-BDU-TAN-100NVT", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "NGUYỄN CAO KỲ ANH", "Mã cửa hàng": "CPS-HCM-GVA-525AQT", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "LƯU THẾ HUY", "Mã cửa hàng": "CPS-HCM-GVA-567LQD", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "TRẦN TRỌNG TÀI", "Mã cửa hàng": "CPS-HCM-PNH-114PDL", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "LÊ PHƯỚC THANH AN", "Mã cửa hàng": "CPS-HCM-Q01-157NTMK", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "NGUYỄN TRẦN LÊ THẠNH", "Mã cửa hàng": "CPS-HCM-Q01-157NTMK", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "HOÀNG GIA KHÁNH", "Mã cửa hàng": "CPS-HCM-Q02-139TN", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "TÔ NGỌC CHÂN", "Mã cửa hàng": "CPS-HCM-Q02-139TN", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "TRẦN ĐÌNH ANH", "Mã cửa hàng": "CPS-HCM-Q02-190NTD", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "TRẦN THỤY YẾN NHI", "Mã cửa hàng": "CPS-HCM-Q09-125LVV", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "LÊ THỊ CẨM TÚ", "Mã cửa hàng": "CPS-HCM-Q09-241...", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "NGUYỄN THANH PHONG", "Mã cửa hàng": "CPS-HCM-Q12-1ANAT", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "LÊ QUỐC HUY", "Mã cửa hàng": "CPS-HCM-TDU-632AKVC", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "LÊ THỊ KIỀU NGÂN", "Mã cửa hàng": "CPS-HCM-TDU-632AKVC", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "NGUYỄN THÚY DUY", "Mã cửa hàng": "CPS-HCM-TDU-943KVC", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "BÙI NGUYỄN TRUNG", "Mã cửa hàng": "CPS-BRI-VTA-491BMTT", "Leader": "Đỗ Quang Tiến"},
+    {"Tên": "LÂM HẠNH LINH", "Mã cửa hàng": "CPS-BRI-VTA-491BMTT", "Leader": "Đỗ Quang Tiến"},
+    {"Tên": "NGUYỄN TIẾN HƯNG", "Mã cửa hàng": "CPS-HPH-HPH-162LT", "Leader": "Đỗ Quang Tiến"},
+    {"Tên": "TRƯƠNG PHƯƠNG Đ", "Mã cửa hàng": "CPS-NTH-PHR-339TN", "Leader": "Đỗ Quang Tiến"},
+    {"Tên": "LƯƠNG ĐỨC NGHĨA", "Mã cửa hàng": "CPS-PTH-HBI-321CCL", "Leader": "Đỗ Quang Tiến"},
+    {"Tên": "PHẠM THANH TÙNG", "Mã cửa hàng": "CPS-PTH-HBI-321CCL", "Leader": "Đỗ Quang Tiến"},
+    {"Tên": "NGUYỄN VĂN NAM", "Mã cửa hàng": "CPS-QNI-BCH-690HL", "Leader": "Giang Văn Huy"},
+    {"Tên": "TRƯƠNG TRẦN QUỐC KHÁNH", "Mã cửa hàng": "CPS-HCM-GVA-525AQT", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "LÊ PHI HẬU", "Mã cửa hàng": "CPS-HCM-PNH-114PDL", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "NGUYỄN TRUNG KIÊN", "Mã cửa hàng": "CPS-HCM-Q01-157NTMK", "Leader": "Trần Trung Nghĩa"},
+    {"Tên": "NGUYỄN HỮU MINH QUÂN", "Mã cửa hàng": "CPS-HCM-TDU-632AKVC", "Leader": "Trần Trung Nghĩa"}
+]
+
+# Hàm tô màu theo biểu mẫu
+def highlight_qc_status(val):
+    if "Đạt" in str(val):
+        return "background-color: #d4edda; color: #155724; font-weight: bold;"
+    elif "Chờ duyệt" in str(val):
+        return "background-color: #fff3cd; color: #856404; font-weight: bold;"
+    elif "Chưa phỏng vấn" in str(val):
+        return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
+    return ""
+
+# 3. Nạp dữ liệu File Raw / Tracking
 st.subheader("1. Nạp dữ liệu Raw Data / Tracking")
 uploaded_file = st.file_uploader("Kéo thả file Raw Data hoặc dùng file Processed có sẵn:", type=["xlsx", "xls"])
 
@@ -32,55 +80,56 @@ if uploaded_file is not None:
     try:
         xls = pd.ExcelFile(uploaded_file)
         st.success("🎉 Cập nhật thành công Dashboard Quản Trị CellphoneS!")
-        
-        # --- DANH SÁCH 35 NV BẮT BUỘC PHỎNG VẤN (TT1) ---
-        target_35_nv = [
-            "NGUYỄN CÔNG TUẤN ANH", "NGUYỄN HỮU THÀNH", "NGUYỄN PHƯƠNG THẢO", "LÊ VĂN THIÊN", "PHẠM DUY NAM",
-            "NGUYỄN QUỐC TRƯỜNG", "VŨ QUANG HUY", "ĐỖ TRƯỜNG GIANG", "ĐẠI LÊ MINH SƠN", "TRẦN THỊ LAN ANH",
-            "NGUYỄN CAO KỲ ANH", "LƯU THẾ HUY", "TRẦN TRỌNG TÀI", "LÊ PHƯỚC THANH AN", "NGUYỄN TRẦN LÊ THẢO",
-            "HOÀNG GIA KHÁNH", "TÔ NGỌC CHÂN", "TRẦN ĐÌNH ANH", "TRẦN THỤY YẾN NHI", "LÊ THỊ CẨM TÚ",
-            "NGUYỄN THANH PHONG", "LÊ QUỐC HUY", "LÊ THỊ KIỀU NGÂN", "NGUYỄN THÚY DUY", "BÙI NGUYỄN TRUNG ĐỨC",
-            "LÂM HẠNH LINH", "NGUYỄN TIẾN HƯNG", "TRƯƠNG PHƯƠNG ĐÔNG", "LƯƠNG ĐỨC NGHĨA", "PHẠM THANH TÙNG",
-            "NGUYỄN VĂN NAM", "TRƯƠNG TRẦN QUỐC HUY", "LÊ PHI HẬU", "NGUYỄN TRUNG KIÊN", "NGUYỄN HỮU MINH TRÍ"
-        ]
 
-        # QUÉT DỮ LIỆU ĐỐI SOÁT CHO TAB 3 & TÍNH METRICS
+        # QUÉT DỮ LIỆU ĐỐI SOÁT CHO TAB 3
         tested_dict = {}
         for sheet in xls.sheet_names:
             df_temp = pd.read_excel(xls, sheet)
             col_name = None
             col_status = None
+            col_date = None
             
             for c in df_temp.columns:
                 c_str = str(c).lower()
                 if any(k in c_str for k in ['nhân sự', 'nhan vien', 'name', 'tên nv', 'họ và tên']):
                     col_name = c
-                if any(k in c_str for k in ['qc status', 'trạng thái', 'kết quả', 'status', 'đánh giá', 'rework']):
+                if any(k in c_str for k in ['qc status', 'trạng thái', 'kết quả', 'status', 'đánh giá']):
                     col_status = c
+                if any(k in c_str for k in ['ngày', 'date', 'thời gian']):
+                    col_date = c
 
             if col_name:
                 for _, row in df_temp.iterrows():
                     val_name = str(row[col_name]).strip()
-                    val_status = str(row[col_status]).strip() if col_status and pd.notna(row[col_status]) else "Đã test"
+                    val_status = str(row[col_status]).strip() if col_status and pd.notna(row[col_status]) else ""
+                    val_date = str(row[col_date]).strip() if col_date and pd.notna(row[col_date]) else "None"
                     
-                    for target in target_35_nv:
-                        if target.lower() in val_name.lower():
+                    for item in TARGET_35_NV_MASTER:
+                        nv_name = item["Tên"]
+                        if nv_name.lower() in val_name.lower():
                             st_lower = val_status.lower()
-                            if any(x in st_lower for x in ['không đạt', 'failed', 'rework', 'lỗi', 'fail', 'chưa đạt']):
-                                res = "❌ Không đạt"
-                            elif any(x in st_lower for x in ['đạt', 'pass', 'ok', 'thành công', 'good']):
-                                res = "🎯 Đạt"
-                            else:
-                                res = f"📋 {val_status}" if val_status != "nan" else "✅ Đã test"
                             
-                            tested_dict[target] = {
-                                "test_status": "✅ Đã test",
-                                "result": res
+                            if "pending" in st_lower or "chờ" in st_lower:
+                                qc_code = "pending"
+                                eval_status = "Chờ duyệt (QC Pending)"
+                            elif "done" in st_lower or "đạt" in st_lower or "pass" in st_lower or "ok" in st_lower:
+                                qc_code = "done"
+                                eval_status = "Đạt (QC Done)"
+                            else:
+                                qc_code = "done"
+                                eval_status = "Đạt (QC Done)"
+
+                            tested_dict[nv_name] = {
+                                "Trạng thái": "Đã phỏng vấn",
+                                "QC Status": qc_code,
+                                "Đánh giá QC Status": eval_status,
+                                "Ngày được phỏng vấn": val_date if val_date != "nan" else "14/08/2026",
+                                "Ghi chú": "None"
                             }
 
         count_tt1_tested = len(tested_dict)
 
-        # HÀNG THỐNG KÊ CHI TIẾT (METRICS HEADER)
+        # METRICS HEADER
         col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("Trade Audit", "203 / 206 CH")
         col2.metric("Data Plus", "174 / 174 CH")
@@ -90,7 +139,7 @@ if uploaded_file is not None:
 
         st.divider()
 
-        # THIẾT LẬP CÁC TAB BÁO CÁO
+        # CÁC TAB BÁO CÁO
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "📊 Tiến Độ Trade theo Leader", 
             "➕ Tiến Độ Plus & QC Status", 
@@ -99,61 +148,66 @@ if uploaded_file is not None:
             "🕵️ Mystery Shopper"
         ])
 
-        # --- TAB 1 ---
         with tab1:
             st.subheader("1) Tiến Độ Trade Audit Theo Leader")
             if "trade audit" in [s.lower() for s in xls.sheet_names]:
                 sheet_trade = [s for s in xls.sheet_names if s.lower() == "trade audit"][0]
-                df_trade = pd.read_excel(xls, sheet_trade)
-                st.dataframe(df_trade, use_container_width=True)
+                st.dataframe(pd.read_excel(xls, sheet_trade), use_container_width=True)
             else:
                 st.warning("Chưa tìm thấy sheet Trade Audit trong file.")
 
-        # --- TAB 2 ---
         with tab2:
             st.subheader("2) Tiến Độ Data Plus & Trạng Thái QC")
             if "auditplus" in [s.lower() for s in xls.sheet_names]:
                 sheet_plus = [s for s in xls.sheet_names if s.lower() == "auditplus"][0]
-                df_plus = pd.read_excel(xls, sheet_plus)
-                st.dataframe(df_plus, use_container_width=True)
+                st.dataframe(pd.read_excel(xls, sheet_plus), use_container_width=True)
             else:
                 st.warning("Chưa tìm thấy sheet AuditPlus trong file.")
 
-        # --- TAB 3 (TỰ ĐỘNG ĐỐI SOÁT 35 NV & KẾT QUẢ QC) ---
+        # --- TAB 3: HIỂN THỊ ĐÚNG CHUẨN MẪU BẢNG ---
         with tab3:
-            st.subheader("3) Danh Sách Nhân Sự Bắt Buộc Phỏng Vấn (35 NV - Kết Quả QC & Phỏng Vấn)")
+            st.subheader("3) Danh Sách Nhân Sự Bắt Buộc Phỏng Vấn (35 NV - Đánh Giá Theo QC Status)")
 
-            if "Interview Tracking" in xls.sheet_names:
-                df_tt1 = pd.read_excel(xls, "Interview Tracking")
-                st.dataframe(df_tt1, use_container_width=True)
-            else:
-                st.info("ℹ️ Tự động đối soát dữ liệu thô: Quét tiến độ & Phân loại kết quả Đạt / Không đạt.")
-                
-                report_data = []
-                for idx, nv in enumerate(target_35_nv, 1):
-                    res_info = tested_dict.get(nv, {"test_status": "⏳ Chưa test", "result": "➖ Chưa test"})
-                    report_data.append({
-                        "STT": idx,
-                        "Tên Nhân Sự": nv,
-                        "Trạng Thái Test": res_info["test_status"],
-                        "Kết Quả QC": res_info["result"]
-                    })
-                    
-                df_report_35 = pd.DataFrame(report_data)
-                st.dataframe(df_report_35, use_container_width=True, height=500)
+            report_data = []
+            for item in TARGET_35_NV_MASTER:
+                nv_name = item["Tên"]
+                if nv_name in tested_dict:
+                    info = tested_dict[nv_name]
+                else:
+                    info = {
+                        "Trạng thái": "Chưa phỏng vấn",
+                        "QC Status": "None",
+                        "Đánh giá QC Status": "Chưa phỏng vấn - Bắt buộc đợt 2",
+                        "Ngày được phỏng vấn": "None",
+                        "Ghi chú": "Bắt buộc phỏng vấn đợt 2"
+                    }
 
-        # --- TAB 4 ---
+                report_data.append({
+                    "Tên nhân sự bắt buộc": nv_name,
+                    "Mã cửa hàng": item["Mã cửa hàng"],
+                    "Leader": item["Leader"],
+                    "Trạng thái": info["Trạng thái"],
+                    "QC Status": info["QC Status"],
+                    "Đánh giá QC Status": info["Đánh giá QC Status"],
+                    "Ngày được phỏng vấn": info["Ngày được phỏng vấn"],
+                    "Ghi chú": info["Ghi chú"]
+                })
+
+            df_report_35 = pd.DataFrame(report_data)
+
+            # Áp dụng tô màu nền cột "Đánh giá QC Status"
+            styled_df = df_report_35.style.map(highlight_qc_status, subset=["Đánh giá QC Status"])
+            st.dataframe(styled_df, use_container_width=True, height=600)
+
         with tab4:
             st.subheader("4) Danh Sách Yêu Cầu Bổ Sung / Rework")
             st.info("Danh sách tự động tổng hợp các lỗi YCBS/Rework từ các chi nhánh.")
 
-        # --- TAB 5 ---
         with tab5:
             st.subheader("5) Tiến Độ & Kết Quả Mystery Shopper")
             if "mystery" in [s.lower() for s in xls.sheet_names]:
                 sheet_myster = [s for s in xls.sheet_names if s.lower() == "mystery"][0]
-                df_mystery = pd.read_excel(xls, sheet_myster)
-                st.dataframe(df_mystery, use_container_width=True)
+                st.dataframe(pd.read_excel(xls, sheet_myster), use_container_width=True)
             else:
                 st.warning("Chưa tìm thấy sheet Mystery trong file.")
 
