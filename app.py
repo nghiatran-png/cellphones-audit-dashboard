@@ -2,34 +2,34 @@ import streamlit as st
 import pandas as pd
 import unicodedata
 
-# 1. Cấu hình trang Dashboard
+# 1. Cấu hình giao diện Streamlit
 st.set_page_config(
     page_title="CellphoneS Daily Audit Dashboard", 
     page_icon="📊", 
     layout="wide"
 )
 
-# Custom CSS giao diện
+# Custom CSS giao diện chuẩn CellphoneS
 st.markdown("""
     <style>
-    .main-header {font-size: 26px; font-weight: bold; color: #d70018; margin-bottom: 20px;}
+    .main-header {font-size: 24px; font-weight: bold; color: #d70018; margin-bottom: 15px;}
     .stTabs [data-baseweb="tab-list"] {gap: 8px;}
-    .stTabs [data-baseweb="tab"] {border-radius: 4px; padding: 8px 16px; background-color: #f1f3f5;}
     .stTabs [aria-selected="true"] {background-color: #d70018 !important; color: white !important; font-weight: bold;}
-    div[data-testid="stMetricValue"] {font-weight: bold;}
+    .report-title {background-color: #d70018; color: white; padding: 10px; font-weight: bold; text-align: center; font-size: 18px; border-radius: 4px 4px 0 0;}
+    .report-sub {background-color: #f8d7da; color: #721c24; padding: 6px; font-style: italic; text-align: center; font-size: 13px; margin-bottom: 15px;}
     </style>
 """, unsafe_allow_html=True)
 
 st.markdown("<div class='main-header'>📊 CELLPHONES AUDIT & TRACKING DASHBOARD TỔNG QUAN</div>", unsafe_allow_html=True)
 
-# Hàm chuẩn hóa chuỗi để so sánh tên chính xác (bỏ dấu, viết thường, xóa khoảng trắng thừa)
+# Hàm khử dấu tiếng Việt & chuẩn hóa chuỗi để so sánh chính xác 100%
 def normalize_text(text):
     if not isinstance(text, str):
         return ""
     text = unicodedata.normalize('NFD', text).encode('ascii', 'ignore').decode('utf-8')
     return text.lower().strip()
 
-# 2. Danh sách Master 35 Nhân sự chuẩn
+# Danh sách Master 35 Nhân sự chuẩn đợt 2
 TARGET_35_NV_MASTER = [
     {"Tên": "NGUYỄN CÔNG TUẤN", "Mã cửa hàng": "CPS-HNO-CGI-126HTM", "Leader": "Vũ Hoài Nam"},
     {"Tên": "NGUYỄN HỮU THÀNH", "Mã cửa hàng": "CPS-HNO-CGI-160NKT", "Leader": "Vũ Hoài Nam"},
@@ -68,158 +68,159 @@ TARGET_35_NV_MASTER = [
     {"Tên": "NGUYỄN HỮU MINH QUÂN", "Mã cửa hàng": "CPS-HCM-TDU-632AKVC", "Leader": "Trần Trung Nghĩa"}
 ]
 
-# Style màu nền ô theo đúng biểu mẫu
-def highlight_qc_status(val):
-    val_str = str(val)
-    if "Đạt" in val_str:
+# Style tô màu theo điểm & đánh giá
+def style_evaluation(val):
+    v = str(val)
+    if "ĐẠT" in v and "KHÔNG" not in v:
         return "background-color: #d4edda; color: #155724; font-weight: bold;"
-    elif "Chờ duyệt" in val_str:
-        return "background-color: #fff3cd; color: #856404; font-weight: bold;"
-    elif "Chưa phỏng vấn" in val_str:
+    elif "KHÔNG ĐẠT" in v:
         return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
+    elif "CHƯA TRẢ BÀI" in v:
+        return "background-color: #e2e3e5; color: #383d41;"
     return ""
 
-# 3. Thao tác nạp dữ liệu File
-st.subheader("1. Nạp dữ liệu Raw Data / Tracking")
+# Nạp dữ liệu Excel
 uploaded_file = st.file_uploader("Kéo thả file Raw Data hoặc dùng file Processed có sẵn:", type=["xlsx", "xls"])
 
 if uploaded_file is not None:
     try:
         xls = pd.ExcelFile(uploaded_file)
-        st.success("🎉 Cập nhật thành công Dashboard Quản Trị CellphoneS!")
+        st.success("🎉 Nạp dữ liệu thành công!")
 
         tested_dict = {}
+        source_sheet_used = "Sheet Trade Audit Plus"
 
-        # Quét dữ liệu chính xác qua tất cả các Sheet
+        # Quét dữ liệu tự động qua các Sheet
         for sheet in xls.sheet_names:
-            df_temp = pd.read_excel(xls, sheet)
+            df = pd.read_excel(xls, sheet)
             
-            # Nhận diện cột theo từ khóa linh hoạt
-            col_name = next((c for c in df_temp.columns if any(k in normalize_text(c) for k in ['nhân sự', 'nhan vien', 'name', 'tên nv', 'họ và tên', 'bắt buộc'])), None)
-            col_status = next((c for c in df_temp.columns if any(k in normalize_text(c) for k in ['qc status', 'trạng thái', 'kết quả', 'status', 'đánh giá'])), None)
-            col_date = next((c for c in df_temp.columns if any(k in normalize_text(c) for k in ['ngày', 'date', 'thời gian'])), None)
+            c_name = next((c for c in df.columns if any(k in normalize_text(c) for k in ['nhan su', 'ten', 'hova ten', 'bat buoc'])), None)
+            c_score = next((c for c in df.columns if any(k in normalize_text(c) for k in ['diem', 'score', 'tra bai', 'ket qua'])), None)
+            c_status = next((c for c in df.columns if any(k in normalize_text(c) for k in ['qc status', 'trang thai', 'status'])), None)
+            c_date = next((c for c in df.columns if any(k in normalize_text(c) for k in ['ngay', 'date', 'thoi gian'])), None)
 
-            if col_name:
-                for _, row in df_temp.iterrows():
-                    val_name = str(row[col_name]).strip() if pd.notna(row[col_name]) else ""
-                    norm_val_name = normalize_text(val_name)
-                    if not norm_val_name: 
+            if c_name:
+                source_sheet_used = f"Sheet {sheet}"
+                for _, r in df.iterrows():
+                    v_name = normalize_text(r[c_name])
+                    if not v_name: 
                         continue
 
-                    val_status = str(row[col_status]).strip() if col_status and pd.notna(row[col_status]) else ""
-                    val_date = str(row[col_date]).strip() if col_date and pd.notna(row[col_date]) else "None"
+                    v_score_raw = r[c_score] if c_score and pd.notna(r[c_score]) else None
+                    v_st = str(r[c_status]).strip() if c_status and pd.notna(r[c_status]) else "done"
+                    v_dt = str(r[c_date]).strip() if c_date and pd.notna(r[c_date]) else "None"
+
+                    # Chuyển đổi định dạng điểm
+                    try:
+                        v_score = float(v_score_raw) if v_score_raw is not None else None
+                    except:
+                        v_score = None
 
                     for item in TARGET_35_NV_MASTER:
-                        target_norm = normalize_text(item["Tên"])
-                        if target_norm in norm_val_name or norm_val_name in target_norm:
-                            st_lower = val_status.lower()
-                            
-                            # Phân loại trạng thái chuẩn xác
-                            if "pending" in st_lower or "chờ" in st_lower:
-                                qc_code = "pending"
-                                eval_status = "Chờ duyệt (QC Pending)"
-                            elif any(k in st_lower for k in ["done", "đạt", "pass", "ok"]):
-                                qc_code = "done"
-                                eval_status = "Đạt (QC Done)"
+                        if normalize_text(item["Tên"]) in v_name or v_name in normalize_text(item["Tên"]):
+                            if v_score is not None:
+                                eval_text = "ĐẠT" if v_score >= 50 else "KHÔNG ĐẠT"
                             else:
-                                # Nếu đã kiểm tra nhưng chưa có kết quả rõ ràng
-                                qc_code = "done" if val_status else "None"
-                                eval_status = "Đạt (QC Done)" if val_status else "Chưa phỏng vấn - Bắt buộc đợt 2"
+                                eval_text = "ĐẠT" if "pass" in str(v_st).lower() or "ok" in str(v_st).lower() else "KHÔNG ĐẠT"
 
-                            if eval_status != "Chưa phỏng vấn - Bắt buộc đợt 2":
-                                tested_dict[item["Tên"]] = {
-                                    "Trạng thái": "Đã phỏng vấn",
-                                    "QC Status": qc_code,
-                                    "Đánh giá QC Status": eval_status,
-                                    "Ngày được phỏng vấn": val_date if val_date != "nan" else "None",
-                                    "Ghi chú": "None"
-                                }
+                            tested_dict[item["Tên"]] = {
+                                "Điểm trả bài": round(v_score, 2) if v_score is not None else "N/A",
+                                "Đánh giá": eval_text,
+                                "QC Status": v_st,
+                                "Ngày thực hiện": v_dt if v_dt != "nan" else "13/08/2026"
+                            }
 
-        count_tt1_tested = len(tested_dict)
-
-        # Header metrics
-        col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Trade Audit", "203 / 206 CH")
-        col2.metric("Data Plus", "174 / 174 CH")
-        col3.metric("Mystery CH", "65 / 114 CH")
-        col4.metric("NV Trả Bài (TT1)", f"{count_tt1_tested} / 35 NV")
-        col5.metric("Điện Thoại Vui", "29 / 32 CH")
+        # Header metrics 5 chỉ số
+        count_tt1 = len(tested_dict)
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Trade Audit", "203 / 206 CH")
+        m2.metric("Data Plus", "174 / 174 CH")
+        m3.metric("Mystery CH", "65 / 114 CH")
+        m4.metric("NV Trả Bài (TT1)", f"{count_tt1} / 35 NV")
+        m5.metric("Điện Thoại Vui", "29 / 32 CH")
 
         st.divider()
 
-        # Render các Tab
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        # Tabs hiển thị
+        t1, t2, t3, t4, t5 = st.tabs([
             "📊 Tiến Độ Trade theo Leader", 
             "➕ Tiến Độ Plus & QC Status", 
-            "🎤 Kiểm Tra Phỏng Vấn (TT1)", 
+            "🎤 CPS — 35 NV Trả Bài (TT1)", 
             "⚠️ Danh Sách YCBS (Rework)", 
             "🕵️ Mystery Shopper"
         ])
 
-        with tab1:
-            st.subheader("1) Tiến Độ Trade Audit Theo Leader")
-            sheet_trade = next((s for s in xls.sheet_names if "trade" in s.lower()), None)
-            if sheet_trade:
-                st.dataframe(pd.read_excel(xls, sheet_trade), use_container_width=True)
-            else:
-                st.warning("Chưa tìm thấy sheet Trade Audit trong file.")
+        with t1:
+            s_tr = next((s for s in xls.sheet_names if "trade" in normalize_text(s)), None)
+            st.dataframe(pd.read_excel(xls, s_tr) if s_tr else "Không tìm thấy Sheet Trade Audit", use_container_width=True)
 
-        with tab2:
-            st.subheader("2) Tiến Độ Data Plus & Trạng Thái QC")
-            sheet_plus = next((s for s in xls.sheet_names if "plus" in s.lower()), None)
-            if sheet_plus:
-                st.dataframe(pd.read_excel(xls, sheet_plus), use_container_width=True)
-            else:
-                st.warning("Chưa tìm thấy sheet AuditPlus trong file.")
+        with t2:
+            s_pl = next((s for s in xls.sheet_names if "plus" in normalize_text(s)), None)
+            st.dataframe(pd.read_excel(xls, s_pl) if s_pl else "Không tìm thấy Sheet AuditPlus", use_container_width=True)
 
-        # Tab 3: Báo cáo 35 nhân sự chuẩn mẫu
-        with tab3:
-            st.subheader("3) Danh Sách Nhân Sự Bắt Buộc Phỏng Vấn (35 NV - Đánh Giá Theo QC Status)")
+        # TAB 3: HIỂN THỊ CHUẨN 100% THEO MẪU BẢNG TRONG ẢNH
+        with t3:
+            st.markdown("<div class='report-title'>CPS — 35 NHÂN SỰ / ĐIỂM TRẢ BÀI TỪ TRADE AUDIT PLUS</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='report-sub'>Nguồn: {uploaded_file.name} | {source_sheet_used}</div>", unsafe_allow_html=True)
 
-            report_data = []
+            # 1. Tính toán Bảng Chỉ số tổng quan (Overview Metrics Table)
+            total_required = 35
+            has_data = len(tested_dict)
+            count_pass = sum(1 for v in tested_dict.values() if v["Đánh giá"] == "ĐẠT")
+            count_fail = sum(1 for v in tested_dict.values() if v["Đánh giá"] == "KHÔNG ĐẠT")
+            count_no_data = total_required - has_data
+
+            df_summary = pd.DataFrame([
+                {"Chỉ số": "Tổng NV bắt buộc", "Kết quả": total_required},
+                {"Chỉ số": "Có dữ liệu trả bài", "Kết quả": has_data},
+                {"Chỉ số": "ĐẠT (>=50)", "Kết quả": count_pass},
+                {"Chỉ số": "KHÔNG ĐẠT (<50)", "Kết quả": count_fail},
+                {"Chỉ số": "CHƯA TRẢ BÀI", "Kết quả": count_no_data}
+            ])
+
+            c_sum, _ = st.columns([1, 1])
+            with c_sum:
+                st.dataframe(df_summary, use_container_width=True, hide_index=True)
+
+            st.write("---")
+
+            # 2. Bảng Danh Sách 35 Nhân Sự Chi Tiết
+            res_list = []
             for item in TARGET_35_NV_MASTER:
                 nv_name = item["Tên"]
                 if nv_name in tested_dict:
                     info = tested_dict[nv_name]
                 else:
                     info = {
-                        "Trạng thái": "Chưa phỏng vấn",
+                        "Điểm trả bài": "➖",
+                        "Đánh giá": "CHƯA TRẢ BÀI",
                         "QC Status": "None",
-                        "Đánh giá QC Status": "Chưa phỏng vấn - Bắt buộc đợt 2",
-                        "Ngày được phỏng vấn": "None",
-                        "Ghi chú": "Bắt buộc phỏng vấn đợt 2"
+                        "Ngày thực hiện": "None"
                     }
 
-                report_data.append({
-                    "Tên nhân sự bắt buộc": nv_name,
+                res_list.append({
+                    "Nhân sự": nv_name,
                     "Mã cửa hàng": item["Mã cửa hàng"],
-                    "Leader": item["Leader"],
-                    "Trạng thái": info["Trạng thái"],
+                    "Điểm trả bài": info["Điểm trả bài"],
+                    "Đánh giá": info["Đánh giá"],
                     "QC Status": info["QC Status"],
-                    "Đánh giá QC Status": info["Đánh giá QC Status"],
-                    "Ngày được phỏng vấn": info["Ngày được phỏng vấn"],
-                    "Ghi chú": info["Ghi chú"]
+                    "Ngày thực hiện": info["Ngày thực hiện"]
                 })
 
-            df_report_35 = pd.DataFrame(report_data)
+            df_detail = pd.DataFrame(res_list)
 
-            # Áp dụng màu sắc hiển thị
-            styled_df = df_report_35.style.map(highlight_qc_status, subset=["Đánh giá QC Status"])
-            st.dataframe(styled_df, use_container_width=True, height=600)
+            # Áp dụng màu sắc cho cột Đánh giá
+            styled_detail = df_detail.style.map(style_evaluation, subset=["Đánh giá"])
+            st.dataframe(styled_detail, use_container_width=True, height=550, hide_index=True)
 
-        with tab4:
-            st.subheader("4) Danh Sách Yêu Cầu Bổ Sung / Rework")
-            st.info("Danh sách tự động tổng hợp các lỗi YCBS/Rework từ các chi nhánh.")
+        with t4:
+            st.info("Danh sách tự động tổng hợp lỗi YCBS/Rework từ cửa hàng.")
 
-        with tab5:
-            st.subheader("5) Tiến Độ & Kết Quả Mystery Shopper")
-            sheet_mystery = next((s for s in xls.sheet_names if "mystery" in s.lower()), None)
-            if sheet_mystery:
-                st.dataframe(pd.read_excel(xls, sheet_mystery), use_container_width=True)
-            else:
-                st.warning("Chưa tìm thấy sheet Mystery trong file.")
+        with t5:
+            s_my = next((s for s in xls.sheet_names if "mystery" in normalize_text(s)), None)
+            st.dataframe(pd.read_excel(xls, s_my) if s_my else "Không tìm thấy Sheet Mystery", use_container_width=True)
 
     except Exception as e:
-        st.error(f"Lỗi xử lý dữ liệu: {e}")
+        st.error(f"Lỗi đọc file dữ liệu: {e}")
 else:
     st.info("👋 Vui lòng tải file Excel báo cáo lên để kích hoạt hệ thống Dashboard!")
