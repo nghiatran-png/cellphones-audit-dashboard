@@ -14,8 +14,6 @@ st.set_page_config(
 st.markdown("""
     <style>
     .stApp { background-color: #f8f9fa; }
-    
-    /* Header Dashboard */
     .cps-header {
         background: linear-gradient(135deg, #d70018 0%, #8b0000 100%);
         color: white; padding: 20px 25px; border-radius: 12px;
@@ -23,37 +21,19 @@ st.markdown("""
     }
     .cps-title {font-size: 28px; font-weight: 800; margin: 0; letter-spacing: 0.5px;}
     .cps-subtitle {font-size: 14px; color: #ffcccc; margin-top: 5px;}
-    
-    /* Custom Thẻ KPI Metrics Đổ Bóng */
     div[data-testid="stMetric"] {
-        background-color: #ffffff;
-        border-left: 5px solid #d70018;
-        border-radius: 10px;
-        padding: 15px 18px;
-        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
-        transition: all 0.3s ease;
+        background-color: #ffffff; border-left: 5px solid #d70018;
+        border-radius: 10px; padding: 15px 18px; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
     }
-    div[data-testid="stMetric"]:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 8px 15px rgba(215, 0, 24, 0.15);
-    }
-    
-    /* Custom Navigation Tabs */
-    .stTabs [data-baseweb="tab-list"] {gap: 8px; background-color: #ffffff; padding: 8px; border-radius: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.04);}
+    .stTabs [data-baseweb="tab-list"] {gap: 8px; background-color: #ffffff; padding: 8px; border-radius: 10px;}
     .stTabs [aria-selected="true"] {background-color: #d70018 !important; color: white !important; font-weight: bold; border-radius: 8px;}
-    
-    /* Bảng Báo Cáo Header */
     .report-title {background-color: #d70018; color: white; padding: 12px; font-weight: bold; text-align: center; font-size: 17px; border-radius: 8px 8px 0 0;}
     .report-sub {background-color: #f8d7da; color: #721c24; padding: 8px; font-style: italic; text-align: center; font-size: 13px; margin-bottom: 20px;}
-    
-    /* Styling Nút Bấm Action */
     div.stButton > button {
         background-color: #d70018 !important; color: white !important; 
         font-weight: bold !important; border-radius: 8px !important; 
         padding: 12px 24px !important; font-size: 15px !important; border: none !important; width: 100%;
-        box-shadow: 0 4px 10px rgba(215, 0, 24, 0.25);
     }
-    div.stButton > button:hover {background-color: #a80013 !important;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -260,7 +240,7 @@ if uploaded_file is not None:
             # 🔍 THANH TÌM KIẾM TOÀN DIỆN
             search_query = st.text_input("🔎 TRA CỨU NHANH (Nhập Mã NV / Tên Nhân Sự / Mã Cửa Hàng):", "").strip()
 
-            # 1. ĐỐI SOÁT 35 NV MASTER CÓ ĐIỂM / KẾT QUẢ ĐẦY ĐỦ
+            # 1. ĐỐI SOÁT 35 NV MASTER CÓ ĐIỂM / KẾT QUẢ ĐẦY ĐỦ (BẮT CẢ TÊN NV VÀ MÃ SHOP KHÔNG BỊ BỎ SÓT)
             tested_dict = {}
             for sheet_name, df in sheets_data.items():
                 c_name = next((c for c in df.columns if any(k in norm(c) for k in ['nhansu', 'ten', 'hovataten', 'batbuoc', 'nhanvien'])), None)
