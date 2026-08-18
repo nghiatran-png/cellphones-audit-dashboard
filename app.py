@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import unicodedata
-import plotly.express as px
-import plotly.graph_objects as go
 import io
 
 # 1. Cấu hình giao diện Streamlit Enterprise
@@ -12,7 +10,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS giao diện thương hiệu CellphoneS & Hiệu ứng SaaS Premium
+# Custom CSS thương hiệu CellphoneS & Hiệu ứng SaaS Premium
 st.markdown("""
     <style>
     .stApp { background-color: #f8f9fa; }
@@ -201,12 +199,12 @@ TARGET_94_ESIM_L1 = [
     {"STT": 94, "MSNV": "S03992", "Tên": "NGUYỄN MẠNH TOÀN", "Shop": "CPS-HNO-BTL-244PVD", "Miền": "Miền Bắc", "Vị trí": "Kho AIO", "Leader": "Vũ Hoài Nam"}
 ]
 
-# Styling Kết quả
+# Styling Kết quả Lần 2 & Lần 1
 def style_evaluation(val):
     v = str(val)
     if "ĐẠT" in v and "KHÔNG" not in v and "CHƯA" not in v:
         return "background-color: #d4edda; color: #155724; font-weight: bold;"
-    elif "CHƯA ĐẠT" in v or "KHÔNG ĐẠT" in v:
+    elif "CHƯA ĐẠT" in v or "KHÔNG ĐẠT" in v or "TRẢ LẦN 2" in v:
         return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
     elif "CHƯA TRẢ BÀI" in v or "CHƯA CHẤM" in v:
         return "background-color: #e2e3e5; color: #383d41;"
@@ -214,9 +212,11 @@ def style_evaluation(val):
 
 def style_note_35(val):
     v = str(val)
-    if "Đã trả bài" in v:
-        return "background-color: #d1ecf1; color: #0c5460; font-weight: bold;"
-    elif "Chưa trả bài" in v:
+    if "Đã trả bài (ĐẠT)" in v:
+        return "background-color: #d4edda; color: #155724; font-weight: bold;"
+    elif "Đã trả bài (Không đạt)" in v:
+        return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
+    elif "Bắt buộc trả lần 2" in v:
         return "background-color: #fff3cd; color: #856404; font-weight: bold;"
     return ""
 
@@ -335,7 +335,7 @@ if uploaded_file is not None:
                             except:
                                 if any(k in l2_lower for k in ['dat', 'pass', 'done', 'ok', '1']): eval_l2 = "ĐẠT"
                                 elif any(k in l2_lower for k in ['khong', 'chua', 'fail', 'reject', '0']): eval_l2 = "CHƯA ĐẠT"
-                                else: eval_l2 = "ĐẠT" if v_l2_raw else "CHƯA CHẤM LẦN 2"
+                                else: eval_l2 = "ĐẠT" if v_l2_raw else "BẮT BUỘC TRẢ LẦN 2"
 
                             esim_l2_dict[item94["MSNV"]] = {
                                 "Merchandiser": v_merch_raw if v_merch_raw else "Field CPS",
@@ -423,10 +423,10 @@ if uploaded_file is not None:
                 df_res_35 = pd.DataFrame(res_35)
                 st.dataframe(df_res_35.style.map(style_evaluation, subset=["Đánh giá"]), use_container_width=True, height=450, hide_index=True)
 
-            # --- TAB 3: 94 NV KHÔNG ĐẠT ESIM L1 ---
+            # --- TAB 3: 94 NV KHÔNG ĐẠT ESIM L1 (VỚI ĐÚNG LOGIC ĐỐI SOÁT TRÙNG 35 NV LẦN 1) ---
             with t_94esim:
                 st.markdown("<div class='report-title'>CPS — DANH SÁCH 94 NHÂN SỰ KHÔNG ĐẠT ESIM L1 (ĐO LƯỜNG CHẤM LẦN 2)</div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='report-sub'>Cập nhật kết quả Lần chấm 02 từ Rawdata | Ghi chú đối soát trùng 35 NV Master Lần 1</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='report-sub'>Cập nhật kết quả Lần chấm 02 từ Rawdata | Hiển thị rõ trạng thái Đã trả bài (ĐẠT/Không đạt) hoặc Bắt buộc trả lần 2</div>", unsafe_allow_html=True)
 
                 count_has_l2 = len(esim_l2_dict)
                 count_pass_l2 = sum(1 for v in esim_l2_dict.values() if v["Kết quả Lần 2"] == "ĐẠT")
@@ -438,7 +438,7 @@ if uploaded_file is not None:
                     {"Chỉ số Đánh Giá": "Đã có dữ liệu Chấm Lần 2", "Số lượng": count_has_l2},
                     {"Chỉ số Đánh Giá": "ĐẠT Lần 2 (>=50)", "Số lượng": count_pass_l2},
                     {"Chỉ số Đánh Giá": "CHƯA ĐẠT Lần 2 (<50)", "Số lượng": count_fail_l2},
-                    {"Chỉ số Đánh Giá": "CHƯA CHẤM LẦN 2", "Số lượng": count_not_l2}
+                    {"Chỉ số Đánh Giá": "BẮT BUỘC TRẢ LẦN 2", "Số lượng": count_not_l2}
                 ])
 
                 c_kpi94, _ = st.columns([1, 1])
@@ -453,10 +453,22 @@ if uploaded_file is not None:
                     msnv = item94["MSNV"]
                     name_norm = norm(item94["Tên"])
 
+                    # Logic đối soát trùng 35 NV Master chuẩn theo yêu cầu:
                     matched_35 = next((t for t in TARGET_35_NV_MASTER if norm(t["Tên"]) in name_norm or name_norm in norm(t["Tên"])), None)
-                    note_35 = ("⚠️ Trùng 35 NV - Đã trả bài L1" if matched_35["Tên"] in tested_dict else "⚠️ Trùng 35 NV - Chưa trả bài L1") if matched_35 else ""
+                    if matched_35:
+                        nv_35_name = matched_35["Tên"]
+                        if nv_35_name in tested_dict:
+                            eval_l1 = tested_dict[nv_35_name]["Đánh giá"]
+                            if "ĐẠT" in eval_l1 and "KHÔNG" not in eval_l1:
+                                note_35 = "Đã trả bài (ĐẠT)"
+                            else:
+                                note_35 = "Đã trả bài (Không đạt)"
+                        else:
+                            note_35 = "Bắt buộc trả lần 2"
+                    else:
+                        note_35 = "-"
 
-                    info_l2 = esim_l2_dict.get(msnv, {"Merchandiser": "Chưa phân bổ", "Lần chấm 02": "➖", "Kết quả Lần 2": "CHƯA CHẤM LẦN 2"})
+                    info_l2 = esim_l2_dict.get(msnv, {"Merchandiser": "Chưa phân bổ", "Lần chấm 02": "➖", "Kết quả Lần 2": "BẮT BUỘC TRẢ LẦN 2"})
 
                     row_94 = {
                         "STT": item94["STT"], "MSNV": item94["MSNV"], "Họ và Tên": item94["Tên"],
@@ -488,7 +500,7 @@ if uploaded_file is not None:
                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                 )
 
-            # --- TAB 4: BẢNG TỔNG HỢP AUDIT PLUS CHUẨN (CÓ FIELD / QC HOÀN THÀNH, QC TRẢ VỀ) ---
+            # --- TAB 4: BẢNG TỔNG HỢP AUDIT PLUS CHUẨN ---
             with t_plus_summary:
                 st.subheader("➕ Bảng Tổng Hợp Tiến Độ Audit Plus Theo Cửa Hàng")
                 s_plus_key = next((s for s in sheets_data.keys() if "plus" in norm(s)), None)
