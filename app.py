@@ -9,7 +9,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS giao diện chuẩn CellphoneS
 st.markdown("""
     <style>
     .main-header {font-size: 24px; font-weight: bold; color: #d70018; margin-bottom: 15px;}
@@ -22,14 +21,14 @@ st.markdown("""
 
 st.markdown("<div class='main-header'>📊 CELLPHONES AUDIT & TRACKING DASHBOARD TỔNG QUAN</div>", unsafe_allow_html=True)
 
-# Hàm khử dấu tiếng Việt & chuẩn hóa chuỗi để so sánh chính xác 100%
+# Khử dấu tiếng Việt
 def normalize_text(text):
     if not isinstance(text, str):
         return ""
     text = unicodedata.normalize('NFD', text).encode('ascii', 'ignore').decode('utf-8')
     return text.lower().strip()
 
-# Danh sách Master 35 Nhân sự chuẩn đợt 2
+# 35 Nhân sự cố định
 TARGET_35_NV_MASTER = [
     {"Tên": "NGUYỄN CÔNG TUẤN", "Mã cửa hàng": "CPS-HNO-CGI-126HTM", "Leader": "Vũ Hoài Nam"},
     {"Tên": "NGUYỄN HỮU THÀNH", "Mã cửa hàng": "CPS-HNO-CGI-160NKT", "Leader": "Vũ Hoài Nam"},
@@ -68,7 +67,6 @@ TARGET_35_NV_MASTER = [
     {"Tên": "NGUYỄN HỮU MINH QUÂN", "Mã cửa hàng": "CPS-HCM-TDU-632AKVC", "Leader": "Trần Trung Nghĩa"}
 ]
 
-# Style tô màu theo điểm & đánh giá
 def style_evaluation(val):
     v = str(val)
     if "ĐẠT" in v and "KHÔNG" not in v:
@@ -79,38 +77,41 @@ def style_evaluation(val):
         return "background-color: #e2e3e5; color: #383d41;"
     return ""
 
-# Nạp dữ liệu Excel
+# Tối ưu đọc file siêu tốc bằng st.cache_data
+@st.cache_data(show_spinner="⚡ Đang phân tích file dung lượng lớn...")
+def load_excel_data(file_bytes):
+    xls = pd.ExcelFile(file_bytes)
+    sheets_dict = {}
+    for s in xls.sheet_names:
+        sheets_dict[s] = pd.read_excel(xls, s)
+    return sheets_dict
+
 uploaded_file = st.file_uploader("Kéo thả file Raw Data hoặc dùng file Processed có sẵn:", type=["xlsx", "xls"])
 
 if uploaded_file is not None:
     try:
-        xls = pd.ExcelFile(uploaded_file)
+        sheets_data = load_excel_data(uploaded_file)
         st.success("🎉 Nạp dữ liệu thành công!")
 
         tested_dict = {}
         source_sheet_used = "Sheet Trade Audit Plus"
 
-        # Quét dữ liệu tự động qua các Sheet
-        for sheet in xls.sheet_names:
-            df = pd.read_excel(xls, sheet)
-            
+        for sheet_name, df in sheets_data.items():
             c_name = next((c for c in df.columns if any(k in normalize_text(c) for k in ['nhan su', 'ten', 'hova ten', 'bat buoc'])), None)
             c_score = next((c for c in df.columns if any(k in normalize_text(c) for k in ['diem', 'score', 'tra bai', 'ket qua'])), None)
             c_status = next((c for c in df.columns if any(k in normalize_text(c) for k in ['qc status', 'trang thai', 'status'])), None)
             c_date = next((c for c in df.columns if any(k in normalize_text(c) for k in ['ngay', 'date', 'thoi gian'])), None)
 
             if c_name:
-                source_sheet_used = f"Sheet {sheet}"
+                source_sheet_used = f"Sheet {sheet_name}"
                 for _, r in df.iterrows():
                     v_name = normalize_text(r[c_name])
-                    if not v_name: 
-                        continue
+                    if not v_name: continue
 
                     v_score_raw = r[c_score] if c_score and pd.notna(r[c_score]) else None
                     v_st = str(r[c_status]).strip() if c_status and pd.notna(r[c_status]) else "done"
                     v_dt = str(r[c_date]).strip() if c_date and pd.notna(r[c_date]) else "None"
 
-                    # Chuyển đổi định dạng điểm
                     try:
                         v_score = float(v_score_raw) if v_score_raw is not None else None
                     except:
@@ -130,7 +131,7 @@ if uploaded_file is not None:
                                 "Ngày thực hiện": v_dt if v_dt != "nan" else "13/08/2026"
                             }
 
-        # Header metrics 5 chỉ số
+        # Header metrics
         count_tt1 = len(tested_dict)
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Trade Audit", "203 / 206 CH")
@@ -141,7 +142,6 @@ if uploaded_file is not None:
 
         st.divider()
 
-        # Tabs hiển thị
         t1, t2, t3, t4, t5 = st.tabs([
             "📊 Tiến Độ Trade theo Leader", 
             "➕ Tiến Độ Plus & QC Status", 
@@ -151,19 +151,18 @@ if uploaded_file is not None:
         ])
 
         with t1:
-            s_tr = next((s for s in xls.sheet_names if "trade" in normalize_text(s)), None)
-            st.dataframe(pd.read_excel(xls, s_tr) if s_tr else "Không tìm thấy Sheet Trade Audit", use_container_width=True)
+            s_tr = next((s for s in sheets_data.keys() if "trade" in normalize_text(s)), None)
+            st.dataframe(sheets_data[s_tr] if s_tr else "Không tìm thấy Sheet Trade Audit", use_container_width=True)
 
         with t2:
-            s_pl = next((s for s in xls.sheet_names if "plus" in normalize_text(s)), None)
-            st.dataframe(pd.read_excel(xls, s_pl) if s_pl else "Không tìm thấy Sheet AuditPlus", use_container_width=True)
+            s_pl = next((s for s in sheets_data.keys() if "plus" in normalize_text(s)), None)
+            st.dataframe(sheets_data[s_pl] if s_pl else "Không tìm thấy Sheet AuditPlus", use_container_width=True)
 
-        # TAB 3: HIỂN THỊ CHUẨN 100% THEO MẪU BẢNG TRONG ẢNH
         with t3:
             st.markdown("<div class='report-title'>CPS — 35 NHÂN SỰ / ĐIỂM TRẢ BÀI TỪ TRADE AUDIT PLUS</div>", unsafe_allow_html=True)
             st.markdown(f"<div class='report-sub'>Nguồn: {uploaded_file.name} | {source_sheet_used}</div>", unsafe_allow_html=True)
 
-            # 1. Tính toán Bảng Chỉ số tổng quan (Overview Metrics Table)
+            # Bảng tổng quan KPI
             total_required = 35
             has_data = len(tested_dict)
             count_pass = sum(1 for v in tested_dict.values() if v["Đánh giá"] == "ĐẠT")
@@ -184,7 +183,7 @@ if uploaded_file is not None:
 
             st.write("---")
 
-            # 2. Bảng Danh Sách 35 Nhân Sự Chi Tiết
+            # Bảng chi tiết 35 nhân sự
             res_list = []
             for item in TARGET_35_NV_MASTER:
                 nv_name = item["Tên"]
@@ -208,8 +207,6 @@ if uploaded_file is not None:
                 })
 
             df_detail = pd.DataFrame(res_list)
-
-            # Áp dụng màu sắc cho cột Đánh giá
             styled_detail = df_detail.style.map(style_evaluation, subset=["Đánh giá"])
             st.dataframe(styled_detail, use_container_width=True, height=550, hide_index=True)
 
@@ -217,8 +214,8 @@ if uploaded_file is not None:
             st.info("Danh sách tự động tổng hợp lỗi YCBS/Rework từ cửa hàng.")
 
         with t5:
-            s_my = next((s for s in xls.sheet_names if "mystery" in normalize_text(s)), None)
-            st.dataframe(pd.read_excel(xls, s_my) if s_my else "Không tìm thấy Sheet Mystery", use_container_width=True)
+            s_my = next((s for s in sheets_data.keys() if "mystery" in normalize_text(s)), None)
+            st.dataframe(sheets_data[s_my] if s_my else "Không tìm thấy Sheet Mystery", use_container_width=True)
 
     except Exception as e:
         st.error(f"Lỗi đọc file dữ liệu: {e}")
