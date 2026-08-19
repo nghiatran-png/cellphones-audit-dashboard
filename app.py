@@ -184,7 +184,7 @@ TARGET_94_ESIM_L1 = [
     {"STT": 94, "MSNV": "S03992", "Tên": "NGUYỄN MẠNH TOÀN", "Shop": "CPS-HNO-BTL-244PVD", "Miền": "Miền Bắc", "Vị trí": "Kho AIO", "Leader": "Vũ Hoài Nam"}
 ]
 
-# Styling Kết quả Lần 2 & Lần 1
+# Styling Kết quả
 def style_evaluation(val):
     v = str(val)
     if "ĐẠT" in v and "KHÔNG" not in v and "CHƯA" not in v:
@@ -285,7 +285,7 @@ elif target_file_path and os.path.exists(target_file_path):
 
         search_query = st.text_input("🔎 TRA CỨU NHANH (Nhập Mã NV / Tên Nhân Sự / Mã Cửa Hàng):", "").strip()
 
-        # 1. ĐỐI SOÁT 35 NV MASTER
+        # 1. ĐỐI SOÁT 35 NV MASTER (SỬA LỖI ĐỂ TÍNH ĐÚNG KẾT QUẢ VÀ TỰ ĐỘNG HIGHLIGHT PV LẦN 2)
         tested_dict = {}
         for sheet_name, df in sheets_data.items():
             c_name = next((c for c in df.columns if any(k in norm(c) for k in ['nhansu', 'ten', 'hovataten', 'batbuoc', 'nhanvien'])), None)
@@ -369,7 +369,7 @@ elif target_file_path and os.path.exists(target_file_path):
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Trade Audit", "203 / 206 CH")
         m2.metric("Data Plus", "174 / 174 CH")
-        m3.metric("Mystery Kịch Bản", "65 / 153 Kịch bản") # Sửa đếm chuẩn 153 Kịch bản
+        m3.metric("Mystery Kịch Bản", "65 / 153 Kịch bản") # Đếm chuẩn theo 153 Kịch bản
         m4.metric("35 NV Trả Bài (TT1)", f"{len(tested_dict)} / 35 NV")
         m5.metric("94 NV Esim L1 (Lần 2)", f"{len(esim_l2_dict)} / 94 NV")
 
@@ -385,27 +385,27 @@ elif target_file_path and os.path.exists(target_file_path):
             "🕵️ MYSTERY SHOOPER (153 KỊCH BẢN)"
         ])
 
-        # --- TAB 1: TỔNG HỢP LEADER ---
+        # --- TAB 1: TỔNG HỢP LEADER (CẬP NHẬT CHUẨN SỐ LƯỢNG GỐC THEO TỪNG LEADER) ---
         with t_pivot:
             st.subheader(f"📌 Báo Cáo Tổng Hợp Tiến Độ Field & QC Theo Leader ({view_mode})")
             lead_names = ["Giang Văn Huy", "Ngô Tuấn Cảnh", "Trần Trung Nghĩa", "Vũ Hoài Nam", "Đỗ Quang Tiến"]
             tt1_counts = {l: sum(1 for v in tested_dict.values() if v["Leader"] == l) for l in lead_names}
             
-            # Tự động thay đổi dòng đếm 35 NV theo Màn hình Lần 1 hoặc Lần 2
             row_nv_label = "NV_TT1_Tra_Bai (Đợt 1)" if "LẦN 1" in view_mode else "NV_TT1_Tra_Bai (Đợt 2)"
 
+            # Phân bổ chuẩn gốc: Nghĩa 19, Nam 9, Tiến 6, Huy 1, Cảnh 0
             pivot_data = {
                 "Chỉ số Progress": ["CH_CPS_Hoan_Tat", "CH_DTV_Hoan_Tat", "Tong_CH", "Field_DONE", "Field_CHUA_DONE", "% Field", "QC_DONE", "% QC", row_nv_label],
                 "Giang Văn Huy": ["3 / 3", "0 / 0", 3, 3, 0, "100.0%", 3, "100.0%", f"{tt1_counts['Giang Văn Huy']} / 1"],
                 "Ngô Tuấn Cảnh": ["23 / 23", "0 / 0", 23, 23, 0, "100.0%", 23, "100.0%", f"{tt1_counts['Ngô Tuấn Cảnh']} / 0"],
-                "Trần Trung Nghĩa": ["54 / 54", "20 / 20", 74, 74, 0, "100.0%", 74, "100.0%", f"{tt1_counts['Trần Trung Nghĩa']} / 16"],
+                "Trần Trung Nghĩa": ["54 / 54", "20 / 20", 74, 74, 0, "100.0%", 74, "100.0%", f"{tt1_counts['Trần Trung Nghĩa']} / 19"],
                 "Vũ Hoài Nam": ["37 / 37", "7 / 10", 47, 44, 3, "93.6%", 44, "93.6%", f"{tt1_counts['Vũ Hoài Nam']} / 9"],
                 "Đỗ Quang Tiến": ["57 / 57", "2 / 2", 59, 59, 0, "100.0%", 59, "100.0%", f"{tt1_counts['Đỗ Quang Tiến']} / 6"],
                 "TOTAL": ["174 / 174", "29 / 32", 206, 203, 3, "98.5%", 203, "98.5%", f"{len(tested_dict)} / 35"]
             }
             st.dataframe(pd.DataFrame(pivot_data), use_container_width=True, hide_index=True)
 
-        # --- TAB 2: 35 NV TRẢ BÀI CÓ KẾT QUẢ VÀ CẢNH BÁO PHỎNG VẤN LẦN 2 ---
+        # --- TAB 2: 35 NV TRẢ BÀI CÓ HIGHLIGHT PHỎNG VẤN LẦN 2 ---
         with t_35nv:
             st.markdown(f"<div class='report-title'>CPS — 35 NHÂN SỰ BẮT BUỘC TRẢ BÀI ({view_mode.upper()})</div>", unsafe_allow_html=True)
 
@@ -487,7 +487,6 @@ elif target_file_path and os.path.exists(target_file_path):
                 msnv = item94["MSNV"]
                 name_norm = norm(item94["Tên"])
 
-                # Logic đối soát chuẩn với 35 NV Lần 1
                 matched_35 = next((t for t in TARGET_35_NV_MASTER if norm(t["Tên"]) in name_norm or name_norm in norm(t["Tên"])), None)
                 if matched_35:
                     nv_35_name = matched_35["Tên"]
@@ -520,14 +519,13 @@ elif target_file_path and os.path.exists(target_file_path):
             styled_df_94 = df_res_94.style.map(style_evaluation, subset=["Kết quả Lần 2"]).map(style_note_35, subset=["Đối Soát 35 NV (Lần 1)"])
             st.dataframe(styled_df_94, use_container_width=True, height=450, hide_index=True)
 
-        # --- TAB 4: BẢNG AUDIT PLUS TỔNG QUAN CHUẨN CODE CỦI (CẤU TRÚC ẢNH MẪU) ---
+        # --- TAB 4: BẢNG AUDIT PLUS TỔNG QUAN CHUẨN CẤU TRÚC CODE CỦI ---
         with t_plus_summary:
             st.subheader(f"➕ Bảng Tổng Hợp Tiến Độ Audit Plus Theo Cửa Hàng ({view_mode})")
             s_plus_key = next((s for s in sheets_data.keys() if "plus" in norm(s)), None)
             if s_plus_key:
                 st.dataframe(sheets_data[s_plus_key], use_container_width=True)
             else:
-                # Bảng chuẩn theo đúng cấu trúc ảnh cũ: Shop, Lần, QC Status, Field hoàn tất count, QC trả về, Hoàn tất QC
                 sample_plus_summary = [
                     {"STT": 1, "Shop": "CPS-AGI-CDO-272LL", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 1, "Hoàn tất QC": 3},
                     {"STT": 2, "Shop": "CPS-AGI-LXG-1393THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
