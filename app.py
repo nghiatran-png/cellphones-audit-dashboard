@@ -6,25 +6,26 @@ import io
 
 # 1. Cấu hình giao diện Streamlit Enterprise
 st.set_page_config(
-    page_title="CellphoneS Enterprise Audit Dashboard", 
+    page_title="CellphoneS Audit Platform - Lần 1 & Lần 2", 
     page_icon="📱", 
     layout="wide"
 )
 
-# Đường dẫn file dữ liệu cố định cho CEO xem 24/7
-PERSISTENT_FILE_PATH = "latest_report.xlsx"
+# Đường dẫn file lưu trữ riêng cho Lần 1 và Lần 2
+PERSISTENT_L1 = "latest_report_l1.xlsx"
+PERSISTENT_L2 = "latest_report_l2.xlsx"
 
-# Custom CSS thương hiệu CellphoneS & Hiệu ứng SaaS Premium
+# Custom CSS thương hiệu CellphoneS
 st.markdown("""
     <style>
     .stApp { background-color: #f8f9fa; }
     .cps-header {
         background: linear-gradient(135deg, #d70018 0%, #8b0000 100%);
         color: white; padding: 20px 25px; border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(215, 0, 24, 0.2); margin-bottom: 25px;
+        box-shadow: 0 4px 15px rgba(215, 0, 24, 0.2); margin-bottom: 20px;
     }
-    .cps-title {font-size: 28px; font-weight: 800; margin: 0; letter-spacing: 0.5px;}
-    .cps-subtitle {font-size: 14px; color: #ffcccc; margin-top: 5px;}
+    .cps-title {font-size: 26px; font-weight: 800; margin: 0; letter-spacing: 0.5px;}
+    .cps-subtitle {font-size: 13px; color: #ffcccc; margin-top: 5px;}
     div[data-testid="stMetric"] {
         background-color: #ffffff; border-left: 5px solid #d70018;
         border-radius: 10px; padding: 15px 18px; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
@@ -183,7 +184,7 @@ TARGET_94_ESIM_L1 = [
     {"STT": 94, "MSNV": "S03992", "Tên": "NGUYỄN MẠNH TOÀN", "Shop": "CPS-HNO-BTL-244PVD", "Miền": "Miền Bắc", "Vị trí": "Kho AIO", "Leader": "Vũ Hoài Nam"}
 ]
 
-# Styling Kết quả Lần 2 & Lần 1
+# Styling Kết quả
 def style_evaluation(val):
     v = str(val)
     if "ĐẠT" in v and "KHÔNG" not in v and "CHƯA" not in v:
@@ -212,45 +213,83 @@ def load_all_sheets(file_bytes_or_path):
         sheets_dict[s] = pd.read_excel(xls, s)
     return sheets_dict
 
-# --- SIDEBAR BỘ LỌC CẤP CAO ---
+# --- SIDEBAR QUẢN TRỊ MÀN HÌNH ĐỘC LẬP LẦN 1 & LẦN 2 ---
 with st.sidebar:
-    st.markdown("### ⚙️ HỆ THỐNG QUẢN TRỊ")
-    uploaded_file = st.file_uploader("Nạp file Excel Báo Cáo Raw mới:", type=["xlsx", "xls"])
+    st.markdown("### 🖥️ CHỌN MÀN HÌNH ĐIỀU HÀNH")
     
-    # Xử lý nguồn dữ liệu: Upload mới hoặc dùng file đã lưu cố định PERSISTENT_FILE_PATH
-    active_data_source = None
-    if uploaded_file is not None:
-        active_data_source = uploaded_file
-        # Lưu file mới ghi đè bản mặc định cho CEO xem 24/7
-        with open(PERSISTENT_FILE_PATH, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        st.success("✅ Đã lưu đè báo cáo mới làm dữ liệu mặc định cho CEO!")
-    elif os.path.exists(PERSISTENT_FILE_PATH):
-        active_data_source = PERSISTENT_FILE_PATH
-        st.info("📌 Đang hiển thị bản Báo cáo Cố định cập nhật gần nhất.")
+    # 📌 NÚT CHUYỂN DỔI MÀN HÌNH CHÍNH TÁCH BIỆT LẦN 1 & LẦN 2
+    view_mode = st.radio(
+        "Chế độ hiển thị Giao diện:",
+        [
+            "📌 MÀN HÌNH LẦN 1", 
+            "📌 MÀN HÌNH LẦN 2", 
+            "📊 TỔNG HỢP SO SÁNH 2 LẦN (CEO VIEW)"
+        ],
+        index=0
+    )
+    
+    st.write("---")
+    st.markdown("### ⚙️ QUẢN TRỊ NẠP FILE MỚI")
+    
+    # Khung Upload riêng cho Lần 1 và Lần 2
+    up_l1 = st.file_uploader("Nạp Excel Raw Data (LẦN 1):", type=["xlsx", "xls"], key="up1")
+    if up_l1 is not None:
+        with open(PERSISTENT_L1, "wb") as f:
+            f.write(up_l1.getbuffer())
+        st.success("✅ Đã lưu file Màn hình Lần 1!")
+
+    up_l2 = st.file_uploader("Nạp Excel Raw Data (LẦN 2):", type=["xlsx", "xls"], key="up2")
+    if up_l2 is not None:
+        with open(PERSISTENT_L2, "wb") as f:
+            f.write(up_l2.getbuffer())
+        st.success("✅ Đã lưu file Màn hình Lần 2!")
 
     st.write("---")
-    st.markdown("### 🔍 BỘ LỌC DASHBOARD")
-    selected_period = st.radio("📅 Chọn Đợt Audit:", ["Tất cả", "Lần 1", "Lần 2"], index=0)
+    st.markdown("### 🔍 BỘ LỌC CHI TIẾT")
     selected_region = st.selectbox("🌐 Chọn Miền:", ["Tất cả", "Miền Bắc", "Miền Nam"])
     selected_leader = st.selectbox("👤 Chọn Leader Phụ Trách:", ["Tất cả", "Giang Văn Huy", "Ngô Tuấn Cảnh", "Trần Trung Nghĩa", "Vũ Hoài Nam", "Đỗ Quang Tiến"])
 
-# HEADER ENTERPRISE
-st.markdown("""
+# HEADER ENTERPRISE THEO MÀN HÌNH ĐANG CHỌN
+header_sub = "Đang hiển thị Màn hình Lần 1" if "LẦN 1" in view_mode else ("Đang hiển thị Màn hình Lần 2" if "LẦN 2" in view_mode else "Màn hình So Sánh 2 Lần dành cho CEO")
+st.markdown(f"""
     <div class="cps-header">
-        <div class="cps-title">📱 CELLPHONES ENTERPRISE AUDIT & MANAGEMENT DASHBOARD</div>
-        <div class="cps-subtitle">Nền tảng quản trị & phân tích tiến độ Audit toàn diện dành cho Ban Giám Đốc và Field Operations</div>
+        <div class="cps-title">📱 CELLPHONES ENTERPRISE AUDIT — {view_mode}</div>
+        <div class="cps-subtitle">{header_sub} (Dữ liệu độc lập 24/7)</div>
     </div>
 """, unsafe_allow_html=True)
 
-if active_data_source is not None:
+# Xác định file dữ liệu active dựa theo Màn hình đang chọn
+target_file_path = PERSISTENT_L1 if "LẦN 1" in view_mode else (PERSISTENT_L2 if "LẦN 2" in view_mode else None)
+
+if view_mode == "📊 TỔNG HỢP SO SÁNH 2 LẦN (CEO VIEW)":
+    st.subheader("📊 Màn Hình So Sánh Tiến Độ Lần 1 vs Lần 2 Dành Cho CEO")
+    has_l1 = os.path.exists(PERSISTENT_L1)
+    has_l2 = os.path.exists(PERSISTENT_L2)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.info("📌 **TRẠNG THÁI MÀN HÌNH LẦN 1:** " + ("🟢 Đã có dữ liệu" if has_l1 else "🔴 Chưa có file"))
+    with col2:
+        st.info("📌 **TRẠNG THÁI MÀN HÌNH LẦN 2:** " + ("🟢 Đã có dữ liệu" if has_l2 else "🔴 Chưa có file"))
+        
+    st.write("---")
+    ceo_summary = [
+        {"Hạng Mục Audit": "Trade Audit CPS", "Tiến độ Lần 1": "174 / 174 CH (100%)", "Tiến độ Lần 2": "174 / 174 CH (Đang làm)", "Đánh giá CEO": "Đạt Kế Hoạch"},
+        {"Hạng Mục Audit": "Trade Audit DTV", "Tiến độ Lần 1": "29 / 32 CH (90.6%)", "Tiến độ Lần 2": "32 / 32 CH (100%)", "Đánh giá CEO": "Hoàn Thành L2"},
+        {"Hạng Mục Audit": "35 NV Trả bài Đợt 1 (TT1)", "Tiến độ Lần 1": "10 / 35 NV Đạt", "Tiến độ Lần 2": "35 / 35 NV (Đối soát L2)", "Đánh giá CEO": "Đang đợt 2"},
+        {"Hạng Mục Audit": "94 NV Esim L1 Fail", "Tiến độ Lần 1": "94 NV Chưa Đạt L1", "Tiến độ Lần 2": "Đang chấm Lần 2", "Đánh giá CEO": "Đang đợt 2"},
+        {"Hạng Mục Audit": "Mystery Shopper (KHBM)", "Tiến độ Lần 1": "65 / 114 CH (57%)", "Tiến độ Lần 2": "Hạn chót 25/08", "Đánh giá CEO": "Cần đẩy nhanh"}
+    ]
+    st.dataframe(pd.DataFrame(ceo_summary), use_container_width=True, hide_index=True)
+
+elif target_file_path and os.path.exists(target_file_path):
     try:
-        sheets_data = load_all_sheets(active_data_source)
+        sheets_data = load_all_sheets(target_file_path)
 
         # 🔍 THANH TÌM KIẾM TOÀN DIỆN
         search_query = st.text_input("🔎 TRA CỨU NHANH (Nhập Mã NV / Tên Nhân Sự / Mã Cửa Hàng):", "").strip()
 
-        # 1. ĐỐI SOÁT 35 NV MASTER CÓ ĐIỂM / KẾT QUẢ ĐẦY ĐỦ (CHỈ KHỚP TÊN HOẶC MÃ CỬA HÀNG HỢP LỆ)
+        # 1. ĐỐI SOÁT 35 NV MASTER
         tested_dict = {}
         for sheet_name, df in sheets_data.items():
             c_name = next((c for c in df.columns if any(k in norm(c) for k in ['nhansu', 'ten', 'hovataten', 'batbuoc', 'nhanvien'])), None)
@@ -267,9 +306,7 @@ if active_data_source is not None:
                     v_st = str(r[c_status]).strip() if c_status and pd.notna(r[c_status]) else ""
                     v_dt = str(r[c_date]).strip() if c_date and pd.notna(r[c_date]) else "None"
 
-                    # Bỏ qua nếu hoàn toàn không có điểm và không có trạng thái
-                    if v_score_raw is None and v_st == "": 
-                        continue
+                    if v_score_raw is None and v_st == "": continue
 
                     try: v_score = float(v_score_raw) if v_score_raw is not None else None
                     except: v_score = None
@@ -279,7 +316,6 @@ if active_data_source is not None:
                         
                         match_name = (norm(item["Tên"]) in v_name or v_name in norm(item["Tên"])) if v_name else False
 
-                        # BẮT BUỘC KHỚP TÊN HOẶC NẾU KHỚP MÃ CỬA HÀNG THÌ BẢNG ĐÓ PHẢI CHUYÊN DÙNG CHO 35 NV
                         if match_name:
                             if v_score is not None:
                                 eval_text = "ĐẠT" if v_score >= 50 else "KHÔNG ĐẠT"
@@ -356,7 +392,7 @@ if active_data_source is not None:
 
         # --- TAB 1: TỔNG HỢP LEADER ---
         with t_pivot:
-            st.subheader("📌 Báo Cáo Tổng Hợp Tiến Độ Field & QC Theo Leader")
+            st.subheader(f"📌 Báo Cáo Tổng Hợp Tiến Độ Field & QC Theo Leader ({view_mode})")
             lead_names = ["Giang Văn Huy", "Ngô Tuấn Cảnh", "Trần Trung Nghĩa", "Vũ Hoài Nam", "Đỗ Quang Tiến"]
             tt1_counts = {l: sum(1 for v in tested_dict.values() if v["Leader"] == l) for l in lead_names}
             
@@ -371,10 +407,9 @@ if active_data_source is not None:
             }
             st.dataframe(pd.DataFrame(pivot_data), use_container_width=True, hide_index=True)
 
-        # --- TAB 2: 35 NV TRẢ BÀI CÓ KẾT QUẢ ĐẦY ĐỦ ---
+        # --- TAB 2: 35 NV TRẢ BÀI ---
         with t_35nv:
-            st.markdown("<div class='report-title'>CPS — 35 NHÂN SỰ / ĐIỂM TRẢ BÀI TỪ TRADE AUDIT PLUS</div>", unsafe_allow_html=True)
-            st.markdown("<div class='report-sub'>Màn hình đối soát điểm thi trả bài đợt 1</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='report-title'>CPS — 35 NHÂN SỰ / ĐIỂM TRẢ BÀI ({view_mode.upper()})</div>", unsafe_allow_html=True)
 
             df_kpi = pd.DataFrame([
                 {"Chỉ số": "Tổng NV bắt buộc", "Kết quả": 35},
@@ -414,10 +449,9 @@ if active_data_source is not None:
             df_res_35 = pd.DataFrame(res_35)
             st.dataframe(df_res_35.style.map(style_evaluation, subset=["Đánh giá"]), use_container_width=True, height=450, hide_index=True)
 
-        # --- TAB 3: 94 NV KHÔNG ĐẠT ESIM L1 (VỚI ĐÚNG LOGIC ĐỐI SOÁT TRÙNG 35 NV LẦN 1) ---
+        # --- TAB 3: 94 NV KHÔNG ĐẠT ESIM L1 ---
         with t_94esim:
-            st.markdown("<div class='report-title'>CPS — DANH SÁCH 94 NHÂN SỰ KHÔNG ĐẠT ESIM L1 (ĐO LƯỜNG CHẤM LẦN 2)</div>", unsafe_allow_html=True)
-            st.markdown("<div class='report-sub'>Cập nhật kết quả Lần chấm 02 từ Rawdata | Hiển thị rõ trạng thái Đã trả bài (ĐẠT/Không đạt) hoặc Bắt buộc trả lần 2</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='report-title'>CPS — DANH SÁCH 94 NHÂN SỰ KHÔNG ĐẠT ESIM L1 ({view_mode.upper()})</div>", unsafe_allow_html=True)
 
             count_has_l2 = len(esim_l2_dict)
             count_pass_l2 = sum(1 for v in esim_l2_dict.values() if v["Kết quả Lần 2"] == "ĐẠT")
@@ -444,7 +478,6 @@ if active_data_source is not None:
                 msnv = item94["MSNV"]
                 name_norm = norm(item94["Tên"])
 
-                # Logic đối soát trùng 35 NV Master chuẩn theo yêu cầu:
                 matched_35 = next((t for t in TARGET_35_NV_MASTER if norm(t["Tên"]) in name_norm or name_norm in norm(t["Tên"])), None)
                 if matched_35:
                     nv_35_name = matched_35["Tên"]
@@ -480,41 +513,16 @@ if active_data_source is not None:
             styled_df_94 = df_res_94.style.map(style_evaluation, subset=["Kết quả Lần 2"]).map(style_note_35, subset=["Đối Soát 35 NV (Lần 1)"])
             st.dataframe(styled_df_94, use_container_width=True, height=450, hide_index=True)
 
-            output_94 = io.BytesIO()
-            with pd.ExcelWriter(output_94, engine='openpyxl') as writer:
-                df_res_94.to_excel(writer, index=False, sheet_name='Report_94_NV_Esim_L2')
-            
-            st.download_button(
-                label="📥 TẢI BÁO CÁO 94 NV ESIM LẦN 2 (.XLSX)",
-                data=output_94.getvalue(),
-                file_name='CPS_Report_94_NV_Esim_L2.xlsx',
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            )
-
         # --- TAB 4: BẢNG TỔNG HỢP AUDIT PLUS CHUẨN ---
         with t_plus_summary:
-            st.subheader("➕ Bảng Tổng Hợp Tiến Độ Audit Plus Theo Cửa Hàng")
+            st.subheader(f"➕ Bảng Tổng Hợp Tiến Độ Audit Plus Theo Cửa Hàng ({view_mode})")
             s_plus_key = next((s for s in sheets_data.keys() if "plus" in norm(s)), None)
             if s_plus_key:
                 st.dataframe(sheets_data[s_plus_key], use_container_width=True)
-            else:
-                sample_plus_summary = [
-                    {"STT": 1, "Shop": "CPS-AGI-CDO-272LL", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 1, "Hoàn tất QC": 3},
-                    {"STT": 2, "Shop": "CPS-AGI-LXG-1393THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                    {"STT": 3, "Shop": "CPS-AGI-LXG-912THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                    {"STT": 4, "Shop": "CPS-AGI-RGI-405NTT", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": 1, "Hoàn tất QC": 2},
-                    {"STT": 5, "Shop": "CPS-BDI-QNH-669THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                    {"STT": 6, "Shop": "CPS-BDU-DAN-253NAN", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": "", "Hoàn tất QC": 3},
-                    {"STT": 7, "Shop": "CPS-BDU-TAN-100NVT", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 2, "Hoàn tất QC": 3},
-                    {"STT": 8, "Shop": "CPS-BDU-TAN-63HHMH", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                    {"STT": 9, "Shop": "CPS-BDU-TAU-156DT747", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                    {"STT": 10, "Shop": "CPS-BDU-TDM-183PL", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 3, "Hoàn tất QC": 3}
-                ]
-                st.dataframe(pd.DataFrame(sample_plus_summary), use_container_width=True, hide_index=True)
 
         # --- TAB 5: YÊU CẦU BỔ SUNG ---
         with t_rework:
-            st.subheader("⚠️ Danh Sách Cửa Hàng QC Note Yêu Cầu Bổ Sung / Lỗi Refuse")
+            st.subheader(f"⚠️ Danh Sách Cửa Hàng QC Note Yêu Cầu Bổ Sung / Lỗi Refuse ({view_mode})")
             rework_details = []
             for s_name, df_temp in sheets_data.items():
                 c_shop = next((c for c in df_temp.columns if any(k in norm(c) for k in ['shop', 'cuahang', 'mach', 'store'])), None)
@@ -540,7 +548,7 @@ if active_data_source is not None:
 
         # --- TAB 6: MYSTERY SHOPPER ---
         with t_mystery:
-            st.subheader("🕵️ Báo Cáo Tiến Độ Mystery Shopper Theo 4 Kịch Bản Thực Tế")
+            st.subheader(f"🕵️ Báo Cáo Tiến Độ Mystery Shopper Theo 4 Kịch Bản Thực Tế ({view_mode})")
             mystery_leader_summary = [
                 {"Leader": "Giang Văn Huy", "Tổng Phân Bổ": 6, "iPhone Cũ": 2, "Laptop": 2, "Android": 1, "iPhone 17 Pro Max": 1, "Trạng Thái": "Đã hoàn tất 100%"},
                 {"Leader": "Ngô Tuấn Cảnh", "Tổng Phân Bổ": 20, "iPhone Cũ": 5, "Laptop": 5, "Android": 5, "iPhone 17 Pro Max": 5, "Trạng Thái": "Đã hoàn tất 100%"},
@@ -554,4 +562,4 @@ if active_data_source is not None:
     except Exception as e:
         st.error(f"Lỗi đọc dữ liệu: {e}")
 else:
-    st.info("👋 Vui lòng tải file Excel báo cáo ở thanh Menu bên trái (Sidebar)!")
+    st.info("👋 Chưa tìm thấy dữ liệu báo cáo cho màn hình này. Vui lòng nạp file Excel ở thanh Sidebar bên trái!")
