@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import unicodedata
+import os
 import io
 
 # 1. Cấu hình giao diện Streamlit Enterprise
@@ -9,6 +10,9 @@ st.set_page_config(
     page_icon="📱", 
     layout="wide"
 )
+
+# Đường dẫn file dữ liệu cố định cho CEO xem 24/7
+PERSISTENT_FILE_PATH = "latest_report.xlsx"
 
 # Custom CSS thương hiệu CellphoneS & Hiệu ứng SaaS Premium
 st.markdown("""
@@ -201,8 +205,8 @@ def style_note_35(val):
     return ""
 
 @st.cache_data(show_spinner=False)
-def load_all_sheets(file_bytes):
-    xls = pd.ExcelFile(file_bytes)
+def load_all_sheets(file_bytes_or_path):
+    xls = pd.ExcelFile(file_bytes_or_path)
     sheets_dict = {}
     for s in xls.sheet_names:
         sheets_dict[s] = pd.read_excel(xls, s)
@@ -211,14 +215,25 @@ def load_all_sheets(file_bytes):
 # --- SIDEBAR BỘ LỌC CẤP CAO ---
 with st.sidebar:
     st.markdown("### ⚙️ HỆ THỐNG QUẢN TRỊ")
-    uploaded_file = st.file_uploader("Nạp file Excel Báo Cáo Raw:", type=["xlsx", "xls"])
+    uploaded_file = st.file_uploader("Nạp file Excel Báo Cáo Raw mới:", type=["xlsx", "xls"])
+    
+    # Xử lý nguồn dữ liệu: Upload mới hoặc dùng file đã lưu cố định PERSISTENT_FILE_PATH
+    active_data_source = None
+    if uploaded_file is not None:
+        active_data_source = uploaded_file
+        # Lưu file mới ghi đè bản mặc định cho CEO xem 24/7
+        with open(PERSISTENT_FILE_PATH, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        st.success("✅ Đã lưu đè báo cáo mới làm dữ liệu mặc định cho CEO!")
+    elif os.path.exists(PERSISTENT_FILE_PATH):
+        active_data_source = PERSISTENT_FILE_PATH
+        st.info("📌 Đang hiển thị bản Báo cáo Cố định cập nhật gần nhất.")
+
     st.write("---")
     st.markdown("### 🔍 BỘ LỌC DASHBOARD")
     selected_period = st.radio("📅 Chọn Đợt Audit:", ["Tất cả", "Lần 1", "Lần 2"], index=0)
     selected_region = st.selectbox("🌐 Chọn Miền:", ["Tất cả", "Miền Bắc", "Miền Nam"])
     selected_leader = st.selectbox("👤 Chọn Leader Phụ Trách:", ["Tất cả", "Giang Văn Huy", "Ngô Tuấn Cảnh", "Trần Trung Nghĩa", "Vũ Hoài Nam", "Đỗ Quang Tiến"])
-    
-    is_clicked = st.button("🚀 PHÂN TÍCH DỮ LIỆU") if uploaded_file else False
 
 # HEADER ENTERPRISE
 st.markdown("""
@@ -228,319 +243,315 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-if uploaded_file is not None:
-    if is_clicked or "active_data" in st.session_state:
-        st.session_state["active_data"] = True
-        
-        try:
-            with st.spinner("⚡ Đang kết nối dữ liệu và đối soát tiến độ..."):
-                sheets_data = load_all_sheets(uploaded_file)
-            st.success("🎉 Khởi tạo Dashboard thành công!")
+if active_data_source is not None:
+    try:
+        sheets_data = load_all_sheets(active_data_source)
 
-            # 🔍 THANH TÌM KIẾM TOÀN DIỆN
-            search_query = st.text_input("🔎 TRA CỨU NHANH (Nhập Mã NV / Tên Nhân Sự / Mã Cửa Hàng):", "").strip()
+        # 🔍 THANH TÌM KIẾM TOÀN DIỆN
+        search_query = st.text_input("🔎 TRA CỨU NHANH (Nhập Mã NV / Tên Nhân Sự / Mã Cửa Hàng):", "").strip()
 
-            # 1. ĐỐI SOÁT 35 NV MASTER CÓ ĐIỂM / KẾT QUẢ ĐẦY ĐỦ (BẮT CẢ TÊN NV VÀ MÃ SHOP KHÔNG BỊ BỎ SÓT)
-            tested_dict = {}
-            for sheet_name, df in sheets_data.items():
-                c_name = next((c for c in df.columns if any(k in norm(c) for k in ['nhansu', 'ten', 'hovataten', 'batbuoc', 'nhanvien'])), None)
-                c_shop = next((c for c in df.columns if any(k in norm(c) for k in ['mach', 'machuahang', 'shop', 'store', 'cuahang'])), None)
-                c_score = next((c for c in df.columns if any(k in norm(c) for k in ['diem', 'score', 'trabai', 'ketqua'])), None)
-                c_status = next((c for c in df.columns if any(k in norm(c) for k in ['qcstatus', 'trangthai', 'status'])), None)
-                c_date = next((c for c in df.columns if any(k in norm(c) for k in ['ngay', 'date', 'thoigian'])), None)
+        # 1. ĐỐI SOÁT 35 NV MASTER CÓ ĐIỂM / KẾT QUẢ ĐẦY ĐỦ (CHỈ KHỚP TÊN HOẶC MÃ CỬA HÀNG HỢP LỆ)
+        tested_dict = {}
+        for sheet_name, df in sheets_data.items():
+            c_name = next((c for c in df.columns if any(k in norm(c) for k in ['nhansu', 'ten', 'hovataten', 'batbuoc', 'nhanvien'])), None)
+            c_shop = next((c for c in df.columns if any(k in norm(c) for k in ['mach', 'machuahang', 'shop', 'store', 'cuahang'])), None)
+            c_score = next((c for c in df.columns if any(k in norm(c) for k in ['diem', 'score', 'trabai', 'ketqua'])), None)
+            c_status = next((c for c in df.columns if any(k in norm(c) for k in ['qcstatus', 'trangthai', 'status'])), None)
+            c_date = next((c for c in df.columns if any(k in norm(c) for k in ['ngay', 'date', 'thoigian'])), None)
 
-                if c_name or c_shop or c_score:
-                    for _, r in df.iterrows():
-                        v_name = norm(r[c_name]) if c_name and pd.notna(r[c_name]) else ""
-                        v_shop = norm(r[c_shop]) if c_shop and pd.notna(r[c_shop]) else ""
-                        v_score_raw = r[c_score] if c_score and pd.notna(r[c_score]) else None
-                        v_st = str(r[c_status]).strip() if c_status and pd.notna(r[c_status]) else ""
-                        v_dt = str(r[c_date]).strip() if c_date and pd.notna(r[c_date]) else "None"
-
-                        if v_score_raw is None and v_st == "": 
-                            continue
-
-                        try: v_score = float(v_score_raw) if v_score_raw is not None else None
-                        except: v_score = None
-
-                        for item in TARGET_35_NV_MASTER:
-                            if selected_leader != "Tất cả" and item["Leader"] != selected_leader: continue
-                            
-                            match_name = (norm(item["Tên"]) in v_name or v_name in norm(item["Tên"])) if v_name else False
-                            match_shop = (norm(item["Mã cửa hàng"]) in v_shop or v_shop in norm(item["Mã cửa hàng"])) if v_shop else False
-
-                            if match_name or match_shop:
-                                if v_score is not None:
-                                    eval_text = "ĐẠT" if v_score >= 50 else "KHÔNG ĐẠT"
-                                elif "done" in v_st.lower() or "pass" in v_st.lower() or "ok" in v_st.lower():
-                                    eval_text = "ĐẠT"
-                                elif "pending" in v_st.lower() or "cho" in v_st.lower() or "fail" in v_st.lower():
-                                    eval_text = "KHÔNG ĐẠT"
-                                else:
-                                    eval_text = "ĐẠT"
-
-                                tested_dict[item["Tên"]] = {
-                                    "Leader": item["Leader"],
-                                    "Điểm trả bài": round(v_score, 2) if v_score is not None else "50.0",
-                                    "Đánh giá": eval_text,
-                                    "QC Status": v_st if v_st else "done",
-                                    "Ngày thực hiện": v_dt if v_dt != "nan" else "13/08/2026"
-                                }
-
-            # 2. ĐỐI SOÁT 94 NV KHÔNG ĐẠT ESIM L1 (LẦN CHẤM 02)
-            esim_l2_dict = {}
-            for sheet_name, df in sheets_data.items():
-                c_msnv = next((c for c in df.columns if any(k in norm(c) for k in ['msnv', 'manv', 'manhansu', 'scode'])), None)
-                c_name = next((c for c in df.columns if any(k in norm(c) for k in ['nhansu', 'ten', 'hovataten', 'nhanvien'])), None)
-                c_l2 = next((c for c in df.columns if any(k in norm(c) for k in ['lancham02', 'lan02', 'cham02', 'lan2', 'diemlan2', 'qclan2'])), None)
-                c_merch = next((c for c in df.columns if any(k in norm(c) for k in ['merchandiser', 'merchantdiser', 'field', 'nvdifield'])), None)
-
+            if c_name or c_shop or c_score:
                 for _, r in df.iterrows():
-                    v_msnv = norm(r[c_msnv]) if c_msnv and pd.notna(r[c_msnv]) else ""
                     v_name = norm(r[c_name]) if c_name and pd.notna(r[c_name]) else ""
-                    v_l2_raw = str(r[c_l2]).strip() if c_l2 and pd.notna(r[c_l2]) else ""
-                    v_merch_raw = str(r[c_merch]).strip() if c_merch and pd.notna(r[c_merch]) else ""
+                    v_shop = norm(r[c_shop]) if c_shop and pd.notna(r[c_shop]) else ""
+                    v_score_raw = r[c_score] if c_score and pd.notna(r[c_score]) else None
+                    v_st = str(r[c_status]).strip() if c_status and pd.notna(r[c_status]) else ""
+                    v_dt = str(r[c_date]).strip() if c_date and pd.notna(r[c_date]) else "None"
 
-                    if not v_l2_raw and not v_merch_raw: continue
+                    # Bỏ qua nếu hoàn toàn không có điểm và không có trạng thái
+                    if v_score_raw is None and v_st == "": 
+                        continue
 
-                    for item94 in TARGET_94_ESIM_L1:
-                        m_code = (norm(item94["MSNV"]) == v_msnv) if v_msnv else False
-                        m_name = (norm(item94["Tên"]) in v_name or v_name in norm(item94["Tên"])) if v_name else False
+                    try: v_score = float(v_score_raw) if v_score_raw is not None else None
+                    except: v_score = None
+
+                    for item in TARGET_35_NV_MASTER:
+                        if selected_leader != "Tất cả" and item["Leader"] != selected_leader: continue
                         
-                        if m_code or m_name:
-                            l2_lower = v_l2_raw.lower()
-                            try:
-                                score_f = float(v_l2_raw)
-                                eval_l2 = "ĐẠT" if score_f >= 50 else "CHƯA ĐẠT"
-                            except:
-                                if any(k in l2_lower for k in ['dat', 'pass', 'done', 'ok', '1']): eval_l2 = "ĐẠT"
-                                elif any(k in l2_lower for k in ['khong', 'chua', 'fail', 'reject', '0']): eval_l2 = "CHƯA ĐẠT"
-                                else: eval_l2 = "ĐẠT" if v_l2_raw else "BẮT BUỘC TRẢ LẦN 2"
+                        match_name = (norm(item["Tên"]) in v_name or v_name in norm(item["Tên"])) if v_name else False
 
-                            esim_l2_dict[item94["MSNV"]] = {
-                                "Merchandiser": v_merch_raw if v_merch_raw else "Field CPS",
-                                "Lần chấm 02": v_l2_raw if v_l2_raw else "Đã chấm",
-                                "Kết quả Lần 2": eval_l2
+                        # BẮT BUỘC KHỚP TÊN HOẶC NẾU KHỚP MÃ CỬA HÀNG THÌ BẢNG ĐÓ PHẢI CHUYÊN DÙNG CHO 35 NV
+                        if match_name:
+                            if v_score is not None:
+                                eval_text = "ĐẠT" if v_score >= 50 else "KHÔNG ĐẠT"
+                            elif "done" in v_st.lower() or "pass" in v_st.lower() or "ok" in v_st.lower():
+                                eval_text = "ĐẠT"
+                            elif "pending" in v_st.lower() or "cho" in v_st.lower() or "fail" in v_st.lower():
+                                eval_text = "KHÔNG ĐẠT"
+                            else:
+                                eval_text = "KHÔNG ĐẠT"
+
+                            tested_dict[item["Tên"]] = {
+                                "Leader": item["Leader"],
+                                "Điểm trả bài": round(v_score, 2) if v_score is not None else "N/A",
+                                "Đánh giá": eval_text,
+                                "QC Status": v_st if v_st else "done",
+                                "Ngày thực hiện": v_dt if v_dt != "nan" else "13/08/2026"
                             }
 
-            # --- TOP METRICS HEADER ---
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Trade Audit", "203 / 206 CH")
-            m2.metric("Data Plus", "174 / 174 CH")
-            m3.metric("Mystery CH", "65 / 114 CH")
-            m4.metric("35 NV Trả Bài (TT1)", f"{len(tested_dict)} / 35 NV")
-            m5.metric("94 NV Esim L1 (Lần 2)", f"{len(esim_l2_dict)} / 94 NV")
+        # 2. ĐỐI SOÁT 94 NV KHÔNG ĐẠT ESIM L1 (LẦN CHẤM 02)
+        esim_l2_dict = {}
+        for sheet_name, df in sheets_data.items():
+            c_msnv = next((c for c in df.columns if any(k in norm(c) for k in ['msnv', 'manv', 'manhansu', 'scode'])), None)
+            c_name = next((c for c in df.columns if any(k in norm(c) for k in ['nhansu', 'ten', 'hovataten', 'nhanvien'])), None)
+            c_l2 = next((c for c in df.columns if any(k in norm(c) for k in ['lancham02', 'lan02', 'cham02', 'lan2', 'diemlan2', 'qclan2'])), None)
+            c_merch = next((c for c in df.columns if any(k in norm(c) for k in ['merchandiser', 'merchantdiser', 'field', 'nvdifield'])), None)
 
-            st.divider()
+            for _, r in df.iterrows():
+                v_msnv = norm(r[c_msnv]) if c_msnv and pd.notna(r[c_msnv]) else ""
+                v_name = norm(r[c_name]) if c_name and pd.notna(r[c_name]) else ""
+                v_l2_raw = str(r[c_l2]).strip() if c_l2 and pd.notna(r[c_l2]) else ""
+                v_merch_raw = str(r[c_merch]).strip() if c_merch and pd.notna(r[c_merch]) else ""
 
-            # --- TABS DỰ ÁN ENTERPRISE ---
-            t_pivot, t_35nv, t_94esim, t_plus_summary, t_rework, t_mystery = st.tabs([
-                "📊 TỔNG HỢP LEADER", 
-                "🎤 35 NV TRẢ BÀI (TT1)", 
-                "📱 94 NV KHÔNG ĐẠT ESIM L1 (LẦN 2)",
-                "➕ BẢNG TỔNG HỢP AUDIT PLUS",
-                "⚠️ YÊU CẦU BỔ SUNG (REWORK)", 
-                "🕵️ MYSTERY SHOOPER (KỊCH BẢN)"
+                if not v_l2_raw and not v_merch_raw: continue
+
+                for item94 in TARGET_94_ESIM_L1:
+                    m_code = (norm(item94["MSNV"]) == v_msnv) if v_msnv else False
+                    m_name = (norm(item94["Tên"]) in v_name or v_name in norm(item94["Tên"])) if v_name else False
+                    
+                    if m_code or m_name:
+                        l2_lower = v_l2_raw.lower()
+                        try:
+                            score_f = float(v_l2_raw)
+                            eval_l2 = "ĐẠT" if score_f >= 50 else "CHƯA ĐẠT"
+                        except:
+                            if any(k in l2_lower for k in ['dat', 'pass', 'done', 'ok', '1']): eval_l2 = "ĐẠT"
+                            elif any(k in l2_lower for k in ['khong', 'chua', 'fail', 'reject', '0']): eval_l2 = "CHƯA ĐẠT"
+                            else: eval_l2 = "ĐẠT" if v_l2_raw else "BẮT BUỘC TRẢ LẦN 2"
+
+                        esim_l2_dict[item94["MSNV"]] = {
+                            "Merchandiser": v_merch_raw if v_merch_raw else "Field CPS",
+                            "Lần chấm 02": v_l2_raw if v_l2_raw else "Đã chấm",
+                            "Kết quả Lần 2": eval_l2
+                        }
+
+        # --- TOP METRICS HEADER ---
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Trade Audit", "203 / 206 CH")
+        m2.metric("Data Plus", "174 / 174 CH")
+        m3.metric("Mystery CH", "65 / 114 CH")
+        m4.metric("35 NV Trả Bài (TT1)", f"{len(tested_dict)} / 35 NV")
+        m5.metric("94 NV Esim L1 (Lần 2)", f"{len(esim_l2_dict)} / 94 NV")
+
+        st.divider()
+
+        # --- TABS DỰ ÁN ENTERPRISE ---
+        t_pivot, t_35nv, t_94esim, t_plus_summary, t_rework, t_mystery = st.tabs([
+            "📊 TỔNG HỢP LEADER", 
+            "🎤 35 NV TRẢ BÀI (TT1)", 
+            "📱 94 NV KHÔNG ĐẠT ESIM L1 (LẦN 2)",
+            "➕ BẢNG TỔNG HỢP AUDIT PLUS",
+            "⚠️ YÊU CẦU BỔ SUNG (REWORK)", 
+            "🕵️ MYSTERY SHOOPER (KỊCH BẢN)"
+        ])
+
+        # --- TAB 1: TỔNG HỢP LEADER ---
+        with t_pivot:
+            st.subheader("📌 Báo Cáo Tổng Hợp Tiến Độ Field & QC Theo Leader")
+            lead_names = ["Giang Văn Huy", "Ngô Tuấn Cảnh", "Trần Trung Nghĩa", "Vũ Hoài Nam", "Đỗ Quang Tiến"]
+            tt1_counts = {l: sum(1 for v in tested_dict.values() if v["Leader"] == l) for l in lead_names}
+            
+            pivot_data = {
+                "Chỉ số Progress": ["CH_CPS_Hoan_Tat", "CH_DTV_Hoan_Tat", "Tong_CH", "Field_DONE", "Field_CHUA_DONE", "% Field", "QC_DONE", "% QC", "NV_TT1_Tra_Bai (Đợt 2)"],
+                "Giang Văn Huy": ["3 / 3", "0 / 0", 3, 3, 0, "100.0%", 3, "100.0%", f"{tt1_counts['Giang Văn Huy']} / 1"],
+                "Ngô Tuấn Cảnh": ["23 / 23", "0 / 0", 23, 23, 0, "100.0%", 23, "100.0%", f"{tt1_counts['Ngô Tuấn Cảnh']} / 0"],
+                "Trần Trung Nghĩa": ["54 / 54", "20 / 20", 74, 74, 0, "100.0%", 74, "100.0%", f"{tt1_counts['Trần Trung Nghĩa']} / 16"],
+                "Vũ Hoài Nam": ["37 / 37", "7 / 10", 47, 44, 3, "93.6%", 44, "93.6%", f"{tt1_counts['Vũ Hoài Nam']} / 9"],
+                "Đỗ Quang Tiến": ["57 / 57", "2 / 2", 59, 59, 0, "100.0%", 59, "100.0%", f"{tt1_counts['Đỗ Quang Tiến']} / 6"],
+                "TOTAL": ["174 / 174", "29 / 32", 206, 203, 3, "98.5%", 203, "98.5%", f"{len(tested_dict)} / 35"]
+            }
+            st.dataframe(pd.DataFrame(pivot_data), use_container_width=True, hide_index=True)
+
+        # --- TAB 2: 35 NV TRẢ BÀI CÓ KẾT QUẢ ĐẦY ĐỦ ---
+        with t_35nv:
+            st.markdown("<div class='report-title'>CPS — 35 NHÂN SỰ / ĐIỂM TRẢ BÀI TỪ TRADE AUDIT PLUS</div>", unsafe_allow_html=True)
+            st.markdown("<div class='report-sub'>Màn hình đối soát điểm thi trả bài đợt 1</div>", unsafe_allow_html=True)
+
+            df_kpi = pd.DataFrame([
+                {"Chỉ số": "Tổng NV bắt buộc", "Kết quả": 35},
+                {"Chỉ số": "Có dữ liệu trả bài", "Kết quả": len(tested_dict)},
+                {"Chỉ số": "ĐẠT (>=50)", "Kết quả": sum(1 for v in tested_dict.values() if v["Đánh giá"] == "ĐẠT")},
+                {"Chỉ số": "KHÔNG ĐẠT (<50)", "Kết quả": sum(1 for v in tested_dict.values() if v["Đánh giá"] == "KHÔNG ĐẠT")},
+                {"Chỉ số": "CHƯA TRẢ BÀI", "Kết quả": 35 - len(tested_dict)}
+            ])
+            
+            c_kpi, _ = st.columns([1, 1])
+            with c_kpi: st.dataframe(df_kpi, use_container_width=True, hide_index=True)
+            st.write("---")
+
+            res_35 = []
+            for item in TARGET_35_NV_MASTER:
+                if selected_leader != "Tất cả" and item["Leader"] != selected_leader: continue
+                nv_name = item["Tên"]
+                info = tested_dict.get(nv_name, {"Điểm trả bài": "➖", "Đánh giá": "CHƯA TRẢ BÀI", "QC Status": "None", "Ngày thực hiện": "None"})
+
+                row_data = {
+                    "Nhân sự": nv_name,
+                    "Mã cửa hàng": item["Mã cửa hàng"],
+                    "Leader": item["Leader"],
+                    "Điểm trả bài": info["Điểm trả bài"],
+                    "Đánh giá": info["Đánh giá"],
+                    "QC Status": info["QC Status"],
+                    "Ngày thực hiện": info["Ngày thực hiện"]
+                }
+
+                if search_query:
+                    match_q = norm(search_query)
+                    if match_q not in norm(nv_name) and match_q not in norm(item["Mã cửa hàng"]):
+                        continue
+
+                res_35.append(row_data)
+
+            df_res_35 = pd.DataFrame(res_35)
+            st.dataframe(df_res_35.style.map(style_evaluation, subset=["Đánh giá"]), use_container_width=True, height=450, hide_index=True)
+
+        # --- TAB 3: 94 NV KHÔNG ĐẠT ESIM L1 (VỚI ĐÚNG LOGIC ĐỐI SOÁT TRÙNG 35 NV LẦN 1) ---
+        with t_94esim:
+            st.markdown("<div class='report-title'>CPS — DANH SÁCH 94 NHÂN SỰ KHÔNG ĐẠT ESIM L1 (ĐO LƯỜNG CHẤM LẦN 2)</div>", unsafe_allow_html=True)
+            st.markdown("<div class='report-sub'>Cập nhật kết quả Lần chấm 02 từ Rawdata | Hiển thị rõ trạng thái Đã trả bài (ĐẠT/Không đạt) hoặc Bắt buộc trả lần 2</div>", unsafe_allow_html=True)
+
+            count_has_l2 = len(esim_l2_dict)
+            count_pass_l2 = sum(1 for v in esim_l2_dict.values() if v["Kết quả Lần 2"] == "ĐẠT")
+            count_fail_l2 = sum(1 for v in esim_l2_dict.values() if v["Kết quả Lần 2"] == "CHƯA ĐẠT")
+            count_not_l2 = 94 - count_has_l2
+
+            df_kpi_94 = pd.DataFrame([
+                {"Chỉ số Đánh Giá": "Tổng NV Không đạt Esim L1", "Số lượng": 94},
+                {"Chỉ số Đánh Giá": "Đã có dữ liệu Chấm Lần 2", "Số lượng": count_has_l2},
+                {"Chỉ số Đánh Giá": "ĐẠT Lần 2 (>=50)", "Số lượng": count_pass_l2},
+                {"Chỉ số Đánh Giá": "CHƯA ĐẠT Lần 2 (<50)", "Số lượng": count_fail_l2},
+                {"Chỉ số Đánh Giá": "BẮT BUỘC TRẢ LẦN 2", "Số lượng": count_not_l2}
             ])
 
-            # --- TAB 1: TỔNG HỢP LEADER ---
-            with t_pivot:
-                st.subheader("📌 Báo Cáo Tổng Hợp Tiến Độ Field & QC Theo Leader")
-                lead_names = ["Giang Văn Huy", "Ngô Tuấn Cảnh", "Trần Trung Nghĩa", "Vũ Hoài Nam", "Đỗ Quang Tiến"]
-                tt1_counts = {l: sum(1 for v in tested_dict.values() if v["Leader"] == l) for l in lead_names}
-                
-                pivot_data = {
-                    "Chỉ số Progress": ["CH_CPS_Hoan_Tat", "CH_DTV_Hoan_Tat", "Tong_CH", "Field_DONE", "Field_CHUA_DONE", "% Field", "QC_DONE", "% QC", "NV_TT1_Tra_Bai (Đợt 2)"],
-                    "Giang Văn Huy": ["3 / 3", "0 / 0", 3, 3, 0, "100.0%", 3, "100.0%", f"{tt1_counts['Giang Văn Huy']} / 1"],
-                    "Ngô Tuấn Cảnh": ["23 / 23", "0 / 0", 23, 23, 0, "100.0%", 23, "100.0%", f"{tt1_counts['Ngô Tuấn Cảnh']} / 0"],
-                    "Trần Trung Nghĩa": ["54 / 54", "20 / 20", 74, 74, 0, "100.0%", 74, "100.0%", f"{tt1_counts['Trần Trung Nghĩa']} / 16"],
-                    "Vũ Hoài Nam": ["37 / 37", "7 / 10", 47, 44, 3, "93.6%", 44, "93.6%", f"{tt1_counts['Vũ Hoài Nam']} / 9"],
-                    "Đỗ Quang Tiến": ["57 / 57", "2 / 2", 59, 59, 0, "100.0%", 59, "100.0%", f"{tt1_counts['Đỗ Quang Tiến']} / 6"],
-                    "TOTAL": ["174 / 174", "29 / 32", 206, 203, 3, "98.5%", 203, "98.5%", f"{len(tested_dict)} / 35"]
-                }
-                st.dataframe(pd.DataFrame(pivot_data), use_container_width=True, hide_index=True)
+            c_kpi94, _ = st.columns([1, 1])
+            with c_kpi94: st.dataframe(df_kpi_94, use_container_width=True, hide_index=True)
+            st.write("---")
 
-            # --- TAB 2: 35 NV TRẢ BÀI CÓ KẾT QUẢ ĐẦY ĐỦ ---
-            with t_35nv:
-                st.markdown("<div class='report-title'>CPS — 35 NHÂN SỰ / ĐIỂM TRẢ BÀI TỪ TRADE AUDIT PLUS</div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='report-sub'>Nguồn dữ liệu: {uploaded_file.name} | Sheet Trade Audit Plus</div>", unsafe_allow_html=True)
+            res_94_list = []
+            for item94 in TARGET_94_ESIM_L1:
+                if selected_leader != "Tất cả" and item94["Leader"] != selected_leader: continue
+                if selected_region != "Tất cả" and item94["Miền"] != selected_region: continue
 
-                df_kpi = pd.DataFrame([
-                    {"Chỉ số": "Tổng NV bắt buộc", "Kết quả": 35},
-                    {"Chỉ số": "Có dữ liệu trả bài", "Kết quả": len(tested_dict)},
-                    {"Chỉ số": "ĐẠT (>=50)", "Kết quả": sum(1 for v in tested_dict.values() if v["Đánh giá"] == "ĐẠT")},
-                    {"Chỉ số": "KHÔNG ĐẠT (<50)", "Kết quả": sum(1 for v in tested_dict.values() if v["Đánh giá"] == "KHÔNG ĐẠT")},
-                    {"Chỉ số": "CHƯA TRẢ BÀI", "Kết quả": 35 - len(tested_dict)}
-                ])
-                
-                c_kpi, _ = st.columns([1, 1])
-                with c_kpi: st.dataframe(df_kpi, use_container_width=True, hide_index=True)
-                st.write("---")
+                msnv = item94["MSNV"]
+                name_norm = norm(item94["Tên"])
 
-                res_35 = []
-                for item in TARGET_35_NV_MASTER:
-                    if selected_leader != "Tất cả" and item["Leader"] != selected_leader: continue
-                    nv_name = item["Tên"]
-                    info = tested_dict.get(nv_name, {"Điểm trả bài": "➖", "Đánh giá": "CHƯA TRẢ BÀI", "QC Status": "None", "Ngày thực hiện": "None"})
-
-                    row_data = {
-                        "Nhân sự": nv_name,
-                        "Mã cửa hàng": item["Mã cửa hàng"],
-                        "Leader": item["Leader"],
-                        "Điểm trả bài": info["Điểm trả bài"],
-                        "Đánh giá": info["Đánh giá"],
-                        "QC Status": info["QC Status"],
-                        "Ngày thực hiện": info["Ngày thực hiện"]
-                    }
-
-                    if search_query:
-                        match_q = norm(search_query)
-                        if match_q not in norm(nv_name) and match_q not in norm(item["Mã cửa hàng"]):
-                            continue
-
-                    res_35.append(row_data)
-
-                df_res_35 = pd.DataFrame(res_35)
-                st.dataframe(df_res_35.style.map(style_evaluation, subset=["Đánh giá"]), use_container_width=True, height=450, hide_index=True)
-
-            # --- TAB 3: 94 NV KHÔNG ĐẠT ESIM L1 (VỚI ĐÚNG LOGIC ĐỐI SOÁT TRÙNG 35 NV LẦN 1) ---
-            with t_94esim:
-                st.markdown("<div class='report-title'>CPS — DANH SÁCH 94 NHÂN SỰ KHÔNG ĐẠT ESIM L1 (ĐO LƯỜNG CHẤM LẦN 2)</div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='report-sub'>Cập nhật kết quả Lần chấm 02 từ Rawdata | Hiển thị rõ trạng thái Đã trả bài (ĐẠT/Không đạt) hoặc Bắt buộc trả lần 2</div>", unsafe_allow_html=True)
-
-                count_has_l2 = len(esim_l2_dict)
-                count_pass_l2 = sum(1 for v in esim_l2_dict.values() if v["Kết quả Lần 2"] == "ĐẠT")
-                count_fail_l2 = sum(1 for v in esim_l2_dict.values() if v["Kết quả Lần 2"] == "CHƯA ĐẠT")
-                count_not_l2 = 94 - count_has_l2
-
-                df_kpi_94 = pd.DataFrame([
-                    {"Chỉ số Đánh Giá": "Tổng NV Không đạt Esim L1", "Số lượng": 94},
-                    {"Chỉ số Đánh Giá": "Đã có dữ liệu Chấm Lần 2", "Số lượng": count_has_l2},
-                    {"Chỉ số Đánh Giá": "ĐẠT Lần 2 (>=50)", "Số lượng": count_pass_l2},
-                    {"Chỉ số Đánh Giá": "CHƯA ĐẠT Lần 2 (<50)", "Số lượng": count_fail_l2},
-                    {"Chỉ số Đánh Giá": "BẮT BUỘC TRẢ LẦN 2", "Số lượng": count_not_l2}
-                ])
-
-                c_kpi94, _ = st.columns([1, 1])
-                with c_kpi94: st.dataframe(df_kpi_94, use_container_width=True, hide_index=True)
-                st.write("---")
-
-                res_94_list = []
-                for item94 in TARGET_94_ESIM_L1:
-                    if selected_leader != "Tất cả" and item94["Leader"] != selected_leader: continue
-                    if selected_region != "Tất cả" and item94["Miền"] != selected_region: continue
-
-                    msnv = item94["MSNV"]
-                    name_norm = norm(item94["Tên"])
-
-                    # Logic đối soát trùng 35 NV Master chuẩn theo yêu cầu:
-                    matched_35 = next((t for t in TARGET_35_NV_MASTER if norm(t["Tên"]) in name_norm or name_norm in norm(t["Tên"])), None)
-                    if matched_35:
-                        nv_35_name = matched_35["Tên"]
-                        if nv_35_name in tested_dict:
-                            eval_l1 = tested_dict[nv_35_name]["Đánh giá"]
-                            if "ĐẠT" in eval_l1 and "KHÔNG" not in eval_l1:
-                                note_35 = "Đã trả bài (ĐẠT)"
-                            else:
-                                note_35 = "Đã trả bài (Không đạt)"
+                # Logic đối soát trùng 35 NV Master chuẩn theo yêu cầu:
+                matched_35 = next((t for t in TARGET_35_NV_MASTER if norm(t["Tên"]) in name_norm or name_norm in norm(t["Tên"])), None)
+                if matched_35:
+                    nv_35_name = matched_35["Tên"]
+                    if nv_35_name in tested_dict:
+                        eval_l1 = tested_dict[nv_35_name]["Đánh giá"]
+                        if "ĐẠT" in eval_l1 and "KHÔNG" not in eval_l1:
+                            note_35 = "Đã trả bài (ĐẠT)"
                         else:
-                            note_35 = "Bắt buộc trả lần 2"
+                            note_35 = "Đã trả bài (Không đạt)"
                     else:
-                        note_35 = "-"
-
-                    info_l2 = esim_l2_dict.get(msnv, {"Merchandiser": "Chưa phân bổ", "Lần chấm 02": "➖", "Kết quả Lần 2": "BẮT BUỘC TRẢ LẦN 2"})
-
-                    row_94 = {
-                        "STT": item94["STT"], "MSNV": item94["MSNV"], "Họ và Tên": item94["Tên"],
-                        "Shop": item94["Shop"], "Miền": item94["Miền"], "Vị trí công việc": item94["Vị trí"],
-                        "Leader Phụ Trách": item94["Leader"], "Merchandiser (Field)": info_l2["Merchandiser"],
-                        "Đối Soát 35 NV (Lần 1)": note_35, "Lần chấm 02": info_l2["Lần chấm 02"],
-                        "Kết quả Lần 2": info_l2["Kết quả Lần 2"]
-                    }
-
-                    if search_query:
-                        match_q = norm(search_query)
-                        if match_q not in norm(item94["MSNV"]) and match_q not in norm(item94["Tên"]) and match_q not in norm(item94["Shop"]):
-                            continue
-
-                    res_94_list.append(row_94)
-
-                df_res_94 = pd.DataFrame(res_94_list)
-                styled_df_94 = df_res_94.style.map(style_evaluation, subset=["Kết quả Lần 2"]).map(style_note_35, subset=["Đối Soát 35 NV (Lần 1)"])
-                st.dataframe(styled_df_94, use_container_width=True, height=450, hide_index=True)
-
-                output_94 = io.BytesIO()
-                with pd.ExcelWriter(output_94, engine='openpyxl') as writer:
-                    df_res_94.to_excel(writer, index=False, sheet_name='Report_94_NV_Esim_L2')
-                
-                st.download_button(
-                    label="📥 TẢI BÁO CÁO 94 NV ESIM LẦN 2 (.XLSX)",
-                    data=output_94.getvalue(),
-                    file_name='CPS_Report_94_NV_Esim_L2.xlsx',
-                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                )
-
-            # --- TAB 4: BẢNG TỔNG HỢP AUDIT PLUS CHUẨN ---
-            with t_plus_summary:
-                st.subheader("➕ Bảng Tổng Hợp Tiến Độ Audit Plus Theo Cửa Hàng")
-                s_plus_key = next((s for s in sheets_data.keys() if "plus" in norm(s)), None)
-                if s_plus_key:
-                    st.dataframe(sheets_data[s_plus_key], use_container_width=True)
+                        note_35 = "Bắt buộc trả lần 2"
                 else:
-                    sample_plus_summary = [
-                        {"STT": 1, "Shop": "CPS-AGI-CDO-272LL", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 1, "Hoàn tất QC": 3},
-                        {"STT": 2, "Shop": "CPS-AGI-LXG-1393THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                        {"STT": 3, "Shop": "CPS-AGI-LXG-912THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                        {"STT": 4, "Shop": "CPS-AGI-RGI-405NTT", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": 1, "Hoàn tất QC": 2},
-                        {"STT": 5, "Shop": "CPS-BDI-QNH-669THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                        {"STT": 6, "Shop": "CPS-BDU-DAN-253NAN", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": "", "Hoàn tất QC": 3},
-                        {"STT": 7, "Shop": "CPS-BDU-TAN-100NVT", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 2, "Hoàn tất QC": 3},
-                        {"STT": 8, "Shop": "CPS-BDU-TAN-63HHMH", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                        {"STT": 9, "Shop": "CPS-BDU-TAU-156DT747", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                        {"STT": 10, "Shop": "CPS-BDU-TDM-183PL", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 3, "Hoàn tất QC": 3}
-                    ]
-                    st.dataframe(pd.DataFrame(sample_plus_summary), use_container_width=True, hide_index=True)
+                    note_35 = "-"
 
-            # --- TAB 5: YÊU CẦU BỔ SUNG ---
-            with t_rework:
-                st.subheader("⚠️ Danh Sách Cửa Hàng QC Note Yêu Cầu Bổ Sung / Lỗi Refuse")
-                rework_details = []
-                for s_name, df_temp in sheets_data.items():
-                    c_shop = next((c for c in df_temp.columns if any(k in norm(c) for k in ['shop', 'cuahang', 'mach', 'store'])), None)
-                    c_lead = next((c for c in df_temp.columns if 'lead' in norm(c) or 'quanly' in norm(c)), None)
-                    c_note = next((c for c in df_temp.columns if any(k in norm(c) for k in ['lydo', 'note', 'ghichu', 'qcnote', 'trave', 'rework', 'loi'])), None)
+                info_l2 = esim_l2_dict.get(msnv, {"Merchandiser": "Chưa phân bổ", "Lần chấm 02": "➖", "Kết quả Lần 2": "BẮT BUỘC TRẢ LẦN 2"})
 
-                    if c_shop:
-                        for idx, r in df_temp.iterrows():
-                            val_lead = str(r[c_lead]).strip() if c_lead and pd.notna(r[c_lead]) else "N/A"
-                            if selected_leader != "Tất cả" and selected_leader not in val_lead: continue
+                row_94 = {
+                    "STT": item94["STT"], "MSNV": item94["MSNV"], "Họ và Tên": item94["Tên"],
+                    "Shop": item94["Shop"], "Miền": item94["Miền"], "Vị trí công việc": item94["Vị trí"],
+                    "Leader Phụ Trách": item94["Leader"], "Merchandiser (Field)": info_l2["Merchandiser"],
+                    "Đối Soát 35 NV (Lần 1)": note_35, "Lần chấm 02": info_l2["Lần chấm 02"],
+                    "Kết quả Lần 2": info_l2["Kết quả Lần 2"]
+                }
 
-                            val_note = str(r[c_note]).strip() if c_note and pd.notna(r[c_note]) else ""
-                            if any(k in norm(val_note) for k in ['thieu', 'bosung', 'rework', 'loi', 'chuadat', 'refuse', 'fail']):
-                                rework_details.append({
-                                    "STT": len(rework_details) + 1,
-                                    "Tên Cửa Hàng": r[c_shop],
-                                    "Leader Phụ Trách": val_lead,
-                                    "QC Note / Lý Do Yêu Cầu Bổ Sung": val_note,
-                                    "Sheet Nguồn": s_name
-                                })
-                if rework_details:
-                    st.dataframe(pd.DataFrame(rework_details), use_container_width=True, hide_index=True)
+                if search_query:
+                    match_q = norm(search_query)
+                    if match_q not in norm(item94["MSNV"]) and match_q not in norm(item94["Tên"]) and match_q not in norm(item94["Shop"]):
+                        continue
 
-            # --- TAB 6: MYSTERY SHOPPER ---
-            with t_mystery:
-                st.subheader("🕵️ Báo Cáo Tiến Độ Mystery Shopper Theo 4 Kịch Bản Thực Tế")
-                mystery_leader_summary = [
-                    {"Leader": "Giang Văn Huy", "Tổng Phân Bổ": 6, "iPhone Cũ": 2, "Laptop": 2, "Android": 1, "iPhone 17 Pro Max": 1, "Trạng Thái": "Đã hoàn tất 100%"},
-                    {"Leader": "Ngô Tuấn Cảnh", "Tổng Phân Bổ": 20, "iPhone Cũ": 5, "Laptop": 5, "Android": 5, "iPhone 17 Pro Max": 5, "Trạng Thái": "Đã hoàn tất 100%"},
-                    {"Leader": "Trần Trung Nghĩa", "Tổng Phân Bổ": 40, "iPhone Cũ": 10, "Laptop": 8, "Android": 7, "iPhone 17 Pro Max": 0, "Trạng Thái": "Còn thiếu 15 bài"},
-                    {"Leader": "Vũ Hoài Nam", "Tổng Phân Bổ": 28, "iPhone Cũ": 4, "Laptop": 4, "Android": 0, "iPhone 17 Pro Max": 0, "Trạng Thái": "Còn thiếu 20 bài"},
-                    {"Leader": "Đỗ Quang Tiến", "Tổng Phân Bổ": 20, "iPhone Cũ": 3, "Laptop": 3, "Android": 0, "iPhone 17 Pro Max": 0, "Trạng Thái": "Còn thiếu 14 bài"},
-                    {"TOTAL": "TỔNG TOÀN DỰ ÁN", "Tổng Phân Bổ": 114, "iPhone Cũ": 24, "Laptop": 22, "Android": 13, "iPhone 17 Pro Max": 6, "Trạng Thái": "Cần hoàn thành 49 bài 0"}
+                res_94_list.append(row_94)
+
+            df_res_94 = pd.DataFrame(res_94_list)
+            styled_df_94 = df_res_94.style.map(style_evaluation, subset=["Kết quả Lần 2"]).map(style_note_35, subset=["Đối Soát 35 NV (Lần 1)"])
+            st.dataframe(styled_df_94, use_container_width=True, height=450, hide_index=True)
+
+            output_94 = io.BytesIO()
+            with pd.ExcelWriter(output_94, engine='openpyxl') as writer:
+                df_res_94.to_excel(writer, index=False, sheet_name='Report_94_NV_Esim_L2')
+            
+            st.download_button(
+                label="📥 TẢI BÁO CÁO 94 NV ESIM LẦN 2 (.XLSX)",
+                data=output_94.getvalue(),
+                file_name='CPS_Report_94_NV_Esim_L2.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+
+        # --- TAB 4: BẢNG TỔNG HỢP AUDIT PLUS CHUẨN ---
+        with t_plus_summary:
+            st.subheader("➕ Bảng Tổng Hợp Tiến Độ Audit Plus Theo Cửa Hàng")
+            s_plus_key = next((s for s in sheets_data.keys() if "plus" in norm(s)), None)
+            if s_plus_key:
+                st.dataframe(sheets_data[s_plus_key], use_container_width=True)
+            else:
+                sample_plus_summary = [
+                    {"STT": 1, "Shop": "CPS-AGI-CDO-272LL", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 1, "Hoàn tất QC": 3},
+                    {"STT": 2, "Shop": "CPS-AGI-LXG-1393THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
+                    {"STT": 3, "Shop": "CPS-AGI-LXG-912THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
+                    {"STT": 4, "Shop": "CPS-AGI-RGI-405NTT", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": 1, "Hoàn tất QC": 2},
+                    {"STT": 5, "Shop": "CPS-BDI-QNH-669THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
+                    {"STT": 6, "Shop": "CPS-BDU-DAN-253NAN", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": "", "Hoàn tất QC": 3},
+                    {"STT": 7, "Shop": "CPS-BDU-TAN-100NVT", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 2, "Hoàn tất QC": 3},
+                    {"STT": 8, "Shop": "CPS-BDU-TAN-63HHMH", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
+                    {"STT": 9, "Shop": "CPS-BDU-TAU-156DT747", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
+                    {"STT": 10, "Shop": "CPS-BDU-TDM-183PL", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 3, "Hoàn tất QC": 3}
                 ]
-                st.dataframe(pd.DataFrame(mystery_leader_summary), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(sample_plus_summary), use_container_width=True, hide_index=True)
 
-        except Exception as e:
-            st.error(f"Lỗi đọc dữ liệu: {e}")
+        # --- TAB 5: YÊU CẦU BỔ SUNG ---
+        with t_rework:
+            st.subheader("⚠️ Danh Sách Cửa Hàng QC Note Yêu Cầu Bổ Sung / Lỗi Refuse")
+            rework_details = []
+            for s_name, df_temp in sheets_data.items():
+                c_shop = next((c for c in df_temp.columns if any(k in norm(c) for k in ['shop', 'cuahang', 'mach', 'store'])), None)
+                c_lead = next((c for c in df_temp.columns if 'lead' in norm(c) or 'quanly' in norm(c)), None)
+                c_note = next((c for c in df_temp.columns if any(k in norm(c) for k in ['lydo', 'note', 'ghichu', 'qcnote', 'trave', 'rework', 'loi'])), None)
+
+                if c_shop:
+                    for idx, r in df_temp.iterrows():
+                        val_lead = str(r[c_lead]).strip() if c_lead and pd.notna(r[c_lead]) else "N/A"
+                        if selected_leader != "Tất cả" and selected_leader not in val_lead: continue
+
+                        val_note = str(r[c_note]).strip() if c_note and pd.notna(r[c_note]) else ""
+                        if any(k in norm(val_note) for k in ['thieu', 'bosung', 'rework', 'loi', 'chuadat', 'refuse', 'fail']):
+                            rework_details.append({
+                                "STT": len(rework_details) + 1,
+                                "Tên Cửa Hàng": r[c_shop],
+                                "Leader Phụ Trách": val_lead,
+                                "QC Note / Lý Do Yêu Cầu Bổ Sung": val_note,
+                                "Sheet Nguồn": s_name
+                            })
+            if rework_details:
+                st.dataframe(pd.DataFrame(rework_details), use_container_width=True, hide_index=True)
+
+        # --- TAB 6: MYSTERY SHOPPER ---
+        with t_mystery:
+            st.subheader("🕵️ Báo Cáo Tiến Độ Mystery Shopper Theo 4 Kịch Bản Thực Tế")
+            mystery_leader_summary = [
+                {"Leader": "Giang Văn Huy", "Tổng Phân Bổ": 6, "iPhone Cũ": 2, "Laptop": 2, "Android": 1, "iPhone 17 Pro Max": 1, "Trạng Thái": "Đã hoàn tất 100%"},
+                {"Leader": "Ngô Tuấn Cảnh", "Tổng Phân Bổ": 20, "iPhone Cũ": 5, "Laptop": 5, "Android": 5, "iPhone 17 Pro Max": 5, "Trạng Thái": "Đã hoàn tất 100%"},
+                {"Leader": "Trần Trung Nghĩa", "Tổng Phân Bổ": 40, "iPhone Cũ": 10, "Laptop": 8, "Android": 7, "iPhone 17 Pro Max": 0, "Trạng Thái": "Còn thiếu 15 bài"},
+                {"Leader": "Vũ Hoài Nam", "Tổng Phân Bổ": 28, "iPhone Cũ": 4, "Laptop": 4, "Android": 0, "iPhone 17 Pro Max": 0, "Trạng Thái": "Còn thiếu 20 bài"},
+                {"Leader": "Đỗ Quang Tiến", "Tổng Phân Bổ": 20, "iPhone Cũ": 3, "Laptop": 3, "Android": 0, "iPhone 17 Pro Max": 0, "Trạng Thái": "Còn thiếu 14 bài"},
+                {"TOTAL": "TỔNG TOÀN DỰ ÁN", "Tổng Phân Bổ": 114, "iPhone Cũ": 24, "Laptop": 22, "Android": 13, "iPhone 17 Pro Max": 6, "Trạng Thái": "Cần hoàn thành 49 bài 0"}
+            ]
+            st.dataframe(pd.DataFrame(mystery_leader_summary), use_container_width=True, hide_index=True)
+
+    except Exception as e:
+        st.error(f"Lỗi đọc dữ liệu: {e}")
 else:
-    st.info("👋 Vui lòng tải file Excel báo cáo ở thanh Menu bên trái (Sidebar) và bấm '🚀 PHÂN TÍCH DỮ LIỆU'!")
+    st.info("👋 Vui lòng tải file Excel báo cáo ở thanh Menu bên trái (Sidebar)!")
