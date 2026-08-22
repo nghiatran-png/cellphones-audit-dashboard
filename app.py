@@ -1,21 +1,20 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import unicodedata
 import os
 import io
 import re
-from datetime import datetime
+import plotly.express as px
 
 # 1. Cấu hình giao diện Streamlit Enterprise
 st.set_page_config(
-    page_title="CellphoneS Audit Platform V3.1 - Lần 1 & Lần 2", 
+    page_title="CellphoneS Audit Platform V3.2 - Lần 1 & Lần 2", 
     page_icon="📱", 
     layout="wide"
 )
 
 # File lưu trữ dữ liệu riêng cho 2 đợt
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.2.0"
 PASS_SCORE = 50
 MYSTERY_TARGET = 153
 
@@ -210,6 +209,15 @@ TARGET_94_ESIM_L1 = [
     {"STT": 94, "MSNV": "S03992", "Tên": "NGUYỄN MẠNH TOÀN", "Shop": "CPS-HNO-BTL-244PVD", "Miền": "Miền Bắc", "Vị trí": "Kho AIO", "Leader": "Vũ Hoài Nam"}
 ]
 
+
+# ============================================================
+# FAST LOOKUP INDEXES — tránh loop 35/94 cho từng dòng raw
+# ============================================================
+MASTER35_BY_NAME = {norm(x["Tên"]): x for x in TARGET_35_NV_MASTER}
+MASTER94_BY_MSNV = {norm(x["MSNV"]): x for x in TARGET_94_ESIM_L1}
+MASTER94_BY_NAME = {norm(x["Tên"]): x for x in TARGET_94_ESIM_L1}
+
+
 # Styling Kết quả
 def style_evaluation(val):
     v = str(val)
@@ -362,7 +370,7 @@ header_sub = "Đang hiển thị Màn hình Lần 1" if "LẦN 1" in view_mode e
 st.markdown(f"""
     <div class="cps-header">
         <div class="cps-title">📱 CELLPHONES ENTERPRISE AUDIT — {view_mode}</div>
-        <div class="cps-subtitle">{header_sub} (Session-safe • v3.1.0)</div>
+        <div class="cps-subtitle">{header_sub} (FAST • v3.2.0)</div>
     </div>
 """, unsafe_allow_html=True)
 
@@ -400,88 +408,100 @@ elif target_sheets is not None:
 
         search_query = st.text_input("🔎 TRA CỨU NHANH (Nhập Mã NV / Tên Nhân Sự / Mã Cửa Hàng):", "").strip()
 
-        # 1. ĐỐI SOÁT 35 NV MASTER (SỬA LỖI ĐỂ TÍNH ĐÚNG KẾT QUẢ VÀ TỰ ĐỘNG HIGHLIGHT PV LẦN 2)
+        # 1. ĐỐI SOÁT 35 NV MASTER — FAST O(rows)
         tested_dict = {}
         for sheet_name, df in sheets_data.items():
+            if df.empty:
+                continue
             c_name = find_col(df.columns, ['Nhân sự', 'Tên nhân viên', 'Họ và tên', 'Tên NV'])
             c_score = find_col(df.columns, ['Điểm trả bài', 'Score', 'Thực đạt'])
-            c_status = next((c for c in df.columns if any(k in norm(c) for k in ['qcstatus', 'trangthai', 'status'])), None)
-            c_date = next((c for c in df.columns if any(k in norm(c) for k in ['ngay', 'date', 'thoigian'])), None)
+            c_status = find_col(df.columns, ['QC Status', 'Trạng thái', 'Status'])
+            c_date = find_col(df.columns, ['Ngày', 'Date', 'Thời gian'])
+            if not c_name:
+                continue
 
-            if c_name or c_score:
-                for _, r in df.iterrows():
-                    v_name = norm(r[c_name]) if c_name and pd.notna(r[c_name]) else ""
-                    v_score_raw = r[c_score] if c_score and pd.notna(r[c_score]) else None
-                    v_st = str(r[c_status]).strip() if c_status and pd.notna(r[c_status]) else ""
-                    v_dt = str(r[c_date]).strip() if c_date and pd.notna(r[c_date]) else "None"
+            cols = [c_name] + [c for c in [c_score, c_status, c_date] if c and c != c_name]
+            tmp = df[cols].copy()
+            tmp["_name_key"] = tmp[c_name].apply(norm)
+            tmp = tmp[tmp["_name_key"].isin(MASTER35_BY_NAME)]
+            if tmp.empty:
+                continue
 
-                    if v_score_raw is None and v_st == "": continue
+            for _, r in tmp.iterrows():
+                item = MASTER35_BY_NAME.get(r["_name_key"])
+                if not item:
+                    continue
+                if selected_leader != "Tất cả" and item["Leader"] != selected_leader:
+                    continue
 
-                    try: v_score = float(v_score_raw) if v_score_raw is not None else None
-                    except: v_score = None
+                raw_score = r[c_score] if c_score and pd.notna(r[c_score]) else None
+                try:
+                    score = float(raw_score) if raw_score is not None else None
+                except (TypeError, ValueError):
+                    score = None
 
-                    for item in TARGET_35_NV_MASTER:
-                        if selected_leader != "Tất cả" and item["Leader"] != selected_leader: continue
-                        match_name = (norm(item["Tên"]) == v_name) if v_name else False
+                qc_raw = str(r[c_status]).strip() if c_status and pd.notna(r[c_status]) else ""
+                date_raw = str(r[c_date]).strip() if c_date and pd.notna(r[c_date]) else "None"
 
-                        if match_name:
-                            # Sửa chuẩn quy tắc điểm >= 50
-                            if v_score is not None:
-                                eval_text = "ĐẠT" if v_score >= PASS_SCORE else "KHÔNG ĐẠT"
-                            else:
-                                eval_text = "CHƯA CÓ ĐIỂM"
+                evaluation = "ĐẠT" if score is not None and score >= PASS_SCORE else ("KHÔNG ĐẠT" if score is not None else "CHƯA CÓ ĐIỂM")
+                note = "Đã hoàn thành" if evaluation == "ĐẠT" else ("Bắt buộc trả/phỏng vấn lại" if evaluation == "KHÔNG ĐẠT" else "Cần xác minh điểm - không suy từ QC Status")
 
-                            if eval_text == "ĐẠT":
-                                note_pv2 = "Đã hoàn thành"
-                            elif eval_text == "KHÔNG ĐẠT":
-                                note_pv2 = "Bắt buộc trả/phỏng vấn lại"
-                            else:
-                                note_pv2 = "Cần xác minh điểm - không suy từ QC Status"
+                tested_dict[item["Tên"]] = {
+                    "Leader": item["Leader"],
+                    "Điểm trả bài": round(score, 2) if score is not None else "N/A",
+                    "Đánh giá": evaluation,
+                    "Ghi chú PV2": note,
+                    "QC Status": qc_raw if qc_raw else "None",
+                    "Ngày thực hiện": date_raw if date_raw != "nan" else "None"
+                }
 
-                            tested_dict[item["Tên"]] = {
-                                "Leader": item["Leader"],
-                                "Điểm trả bài": round(v_score, 2) if v_score is not None else "N/A",
-                                "Đánh giá": eval_text,
-                                "Ghi chú PV2": note_pv2,
-                                "QC Status": v_st if v_st else "done",
-                                "Ngày thực hiện": v_dt if v_dt != "nan" else "None"
-                            }
-
-        # 2. ĐỐI SOÁT 94 NV KHÔNG ĐẠT ESIM L1 (LẦN CHẤM 02)
+        # 2. ĐỐI SOÁT 94 NV ESIM L1 — FAST O(rows)
         esim_l2_dict = {}
         for sheet_name, df in sheets_data.items():
-            c_msnv = next((c for c in df.columns if any(k in norm(c) for k in ['msnv', 'manv', 'manhansu', 'scode'])), None)
-            c_name = next((c for c in df.columns if any(k in norm(c) for k in ['nhansu', 'ten', 'hovataten', 'nhanvien'])), None)
-            c_l2 = next((c for c in df.columns if any(k in norm(c) for k in ['lancham02', 'lan02', 'cham02', 'lan2', 'diemlan2', 'qclan2'])), None)
-            c_merch = next((c for c in df.columns if any(k in norm(c) for k in ['merchandiser', 'merchantdiser', 'field', 'nvdifield'])), None)
+            if df.empty:
+                continue
+            c_msnv = find_col(df.columns, ['MSNV', 'Mã NV', 'Mã nhân sự', 'scode'])
+            c_name = find_col(df.columns, ['Nhân sự', 'Tên', 'Họ và tên', 'Nhân viên'])
+            c_l2 = find_col(df.columns, ['Lần chấm 02', 'Lần 02', 'Chấm 02', 'Lần 2', 'Điểm lần 2', 'QC lần 2'])
+            c_merch = find_col(df.columns, ['Merchandiser', 'Field', 'NV đi field'])
+            if not c_l2:
+                continue
 
-            for _, r in df.iterrows():
-                v_msnv = norm(r[c_msnv]) if c_msnv and pd.notna(r[c_msnv]) else ""
-                v_name = norm(r[c_name]) if c_name and pd.notna(r[c_name]) else ""
-                v_l2_raw = str(r[c_l2]).strip() if c_l2 and pd.notna(r[c_l2]) else ""
-                v_merch_raw = str(r[c_merch]).strip() if c_merch and pd.notna(r[c_merch]) else ""
+            cols = [c_l2] + [c for c in [c_msnv, c_name, c_merch] if c and c != c_l2]
+            tmp = df[cols].copy()
+            tmp["_id_key"] = tmp[c_msnv].apply(norm) if c_msnv else ""
+            tmp["_name_key"] = tmp[c_name].apply(norm) if c_name else ""
+            tmp = tmp[tmp["_id_key"].isin(MASTER94_BY_MSNV) | tmp["_name_key"].isin(MASTER94_BY_NAME)]
+            if tmp.empty:
+                continue
 
-                if not v_l2_raw and not v_merch_raw: continue
+            for _, r in tmp.iterrows():
+                item94 = MASTER94_BY_MSNV.get(r["_id_key"]) or MASTER94_BY_NAME.get(r["_name_key"])
+                if item94 is None:
+                    continue
 
-                for item94 in TARGET_94_ESIM_L1:
-                    m_code = (norm(item94["MSNV"]) == v_msnv) if v_msnv else False
-                    m_name = (norm(item94["Tên"]) == v_name) if v_name else False
-                    
-                    if m_code or m_name:
-                        l2_lower = v_l2_raw.lower()
-                        try:
-                            score_f = float(v_l2_raw)
-                            eval_l2 = "ĐẠT" if score_f >= 50 else "CHƯA ĐẠT"
-                        except:
-                            if any(k in l2_lower for k in ['dat', 'pass', 'done', 'ok', '1']): eval_l2 = "ĐẠT"
-                            elif any(k in l2_lower for k in ['khong', 'chua', 'fail', 'reject', '0']): eval_l2 = "CHƯA ĐẠT"
-                            else: eval_l2 = "ĐẠT" if v_l2_raw else "BẮT BUỘC TRẢ LẦN 2"
+                raw_l2 = str(r[c_l2]).strip() if pd.notna(r[c_l2]) else ""
+                field_raw = str(r[c_merch]).strip() if c_merch and pd.notna(r[c_merch]) else ""
+                if not raw_l2 and not field_raw:
+                    continue
 
-                        esim_l2_dict[item94["MSNV"]] = {
-                            "Merchandiser": v_merch_raw if v_merch_raw else "Field CPS",
-                            "Lần chấm 02": v_l2_raw if v_l2_raw else "Đã chấm",
-                            "Kết quả Lần 2": eval_l2
-                        }
+                try:
+                    score_f = float(raw_l2)
+                    eval_l2 = "ĐẠT" if score_f >= PASS_SCORE else "CHƯA ĐẠT"
+                except (TypeError, ValueError):
+                    s = norm(raw_l2)
+                    if s in {"dat", "pass", "done", "ok", "1"}:
+                        eval_l2 = "ĐẠT"
+                    elif any(k in s for k in ["khong", "chua", "fail", "reject", "0"]):
+                        eval_l2 = "CHƯA ĐẠT"
+                    else:
+                        eval_l2 = "CHƯA XÁC ĐỊNH" if raw_l2 else "BẮT BUỘC TRẢ LẦN 2"
+
+                esim_l2_dict[item94["MSNV"]] = {
+                    "Merchandiser": field_raw if field_raw else "Chưa phân bổ",
+                    "Lần chấm 02": raw_l2 if raw_l2 else "➖",
+                    "Kết quả Lần 2": eval_l2
+                }
 
         # --- TOP METRICS HEADER ---
         progress = compute_progress_metrics(sheets_data)
