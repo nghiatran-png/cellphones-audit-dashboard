@@ -12,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-APP_VERSION="3.3.0"
+APP_VERSION="3.4.0"
 PASS_SCORE=50
 MYSTERY_TARGET=153
 
@@ -189,9 +189,13 @@ def classify_qc(v):
     return "UNKNOWN"
 
 def eval_score(v):
-    try: x=float(v)
-    except: return "CHƯA CÓ ĐIỂM"
-    return "ĐẠT" if x>=PASS_SCORE else "KHÔNG ĐẠT"
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return "CHƯA CÓ ĐIỂM"
+    # Quy tắc nghiệp vụ: 49.99 làm tròn thành 50 => ĐẠT
+    rounded = round(x)
+    return "ĐẠT" if rounded >= PASS_SCORE else "KHÔNG ĐẠT"
 
 # ---------------- Session/file loading ----------------
 for k in ["l1_bytes","l1_name","l2_bytes","l2_name"]:
@@ -239,6 +243,46 @@ def plan_level(df):
         x["_dt"]=pd.to_datetime(x["Ngày update"],errors="coerce",dayfirst=True)
         x=x.sort_values("_dt")
     return x.drop_duplicates("Tên Plan",keep="last").copy()
+
+
+def get_sheet_flexible(sheets, keywords):
+    """Tìm sheet theo từ khóa, không phụ thuộc tên sheet tuyệt đối."""
+    if not sheets:
+        return pd.DataFrame()
+    keys = [norm(k) for k in keywords]
+    # exact-ish priority
+    for name, df in sheets.items():
+        n = norm(name)
+        if all(k in n for k in keys):
+            return df.copy()
+    return pd.DataFrame()
+
+def mystery_scenario_series(df):
+    """
+    Ưu tiên Hạng mục của Mystery.
+    Nếu thiếu, suy từ Tên Plan.
+    """
+    if df is None or df.empty:
+        return pd.Series(dtype=str)
+    if "Hạng mục" in df.columns:
+        s = df["Hạng mục"].fillna("").astype(str).str.strip()
+        if s.ne("").any():
+            return s
+    plan = df["Tên Plan"].fillna("").astype(str) if "Tên Plan" in df.columns else pd.Series("", index=df.index)
+    def parse_scenario(v):
+        t = norm(v)
+        if "macbook" in t or "ipad" in t:
+            return "MACBOOK-IPAD"
+        if "iphone cu" in t or "likenew" in t:
+            return "IPHONE CŨ"
+        if "iphone 17" in t or "17 pro max" in t:
+            return "IPHONE 17 PRO MAX"
+        if "android" in t:
+            return "ANDROID"
+        if "laptop" in t:
+            return "LAPTOP"
+        return str(v).strip()
+    return plan.apply(parse_scenario)
 
 # ---------------- Plus interview engine ----------------
 FLAG_COLS=["Trả lời ngay","Trả lời Phụ","Trả lời có tài liệu","Có xem tài liệu"]
@@ -336,35 +380,145 @@ def match94(interviews):
 
 # ---------------- Plan-level metrics ----------------
 def metrics(sheets,round_label):
-    trade=filter_round(sheets.get("Trade Audit",pd.DataFrame()),round_label)
-    plus=filter_round(sheets.get("Trade Audit Plus",pd.DataFrame()),round_label)
-    mystery=filter_round(sheets.get("Mystery Audit",pd.DataFrame()),round_label)
+    # Trade + Plus theo đúng vòng.
+    trade_all = get_sheet_flexible(sheets, ["trade", "audit"])
+    plus_all = get_sheet_flexible(sheets, ["trade", "audit", "plus"])
+    # Mystery là luồng KPI 153 riêng, luôn lấy data mới nhất toàn sheet,
+    # KHÔNG filter theo L1/L2.
+    mystery = get_sheet_flexible(sheets, ["mystery"])
 
-    tplan=plan_level(trade); pplan=plan_level(plus); mplan=plan_level(mystery)
-    interviews=plus_interviews(plus)
+    # tránh lấy nhầm Trade Audit Plus cho Trade Audit
+    if not trade_all.empty and "plus" in norm(next((n for n in sheets if sheets[n] is trade_all), "")):
+        trade_all = pd.DataFrame()
+
+    # Chọn Trade Audit chính xác hơn
+    for name, df in sheets.items():
+        n = norm(name)
+        if "trade audit" in n and "plus" not in n:
+            trade_all = df.copy()
+            break
+    for name, df in sheets.items():
+        n = norm(name)
+        if "trade audit plus" in n or ("trade" in n and "plus" in n):
+            plus_all = df.copy()
+            break
+    for name, df in sheets.items():
+        if "mystery" in norm(name):
+            mystery = df.copy()
+            break
+
+    trade = filter_round(trade_all, round_label)
+    plus = filter_round(plus_all, round_label)
+
+    tplan = plan_level(trade)
+    pplan = plan_level(plus)
+    mplan = plan_level(mystery)
+    interviews = plus_interviews(plus)
 
     def qc_counts(pl):
-        if pl.empty or "QC Status" not in pl.columns: return {"DONE":0,"PENDING":0,"PENDING_REVIEW":0,"REJECT":0,"REWORK":0}
+        if pl.empty or "QC Status" not in pl.columns:
+            return {"DONE":0,"PENDING":0,"PENDING_REVIEW":0,"REJECT":0,"REWORK":0}
         q=pl["QC Status"].apply(classify_qc)
         return {k:int((q==k).sum()) for k in ["DONE","PENDING","PENDING_REVIEW","REJECT","REWORK"]}
 
     def field_done(pl):
-        if pl.empty or "Status Plan" not in pl.columns:return 0
+        if pl.empty or "Status Plan" not in pl.columns:
+            return 0
         return int(pl["Status Plan"].apply(norm).eq("done").sum())
 
-    system=tplan["Hệ thống"].fillna("").astype(str).str.upper() if not tplan.empty and "Hệ thống" in tplan.columns else pd.Series(dtype=str)
-    cps_stores=tplan.loc[system.eq("CPS"),"Mã cửa hàng"].nunique() if len(system) else 0
-    dtv_stores=tplan.loc[system.eq("DTV"),"Mã cửa hàng"].nunique() if len(system) else 0
+    system = tplan["Hệ thống"].fillna("").astype(str).str.upper() if not tplan.empty and "Hệ thống" in tplan.columns else pd.Series(dtype=str)
+    cps_stores = tplan.loc[system.eq("CPS"),"Mã cửa hàng"].nunique() if len(system) else 0
+    dtv_stores = tplan.loc[system.eq("DTV"),"Mã cửa hàng"].nunique() if len(system) else 0
+
+    # L2: loại DTV khỏi Trade KPI vận hành
+    if round_label == "Lần 2" and not tplan.empty and "Hệ thống" in tplan.columns:
+        tplan_cps = tplan[tplan["Hệ thống"].fillna("").astype(str).str.upper().eq("CPS")].copy()
+    else:
+        tplan_cps = tplan.copy()
 
     return {
         "trade_raw":trade,"plus_raw":plus,"mystery_raw":mystery,
-        "trade_plan":tplan,"plus_plan":pplan,"mystery_plan":mplan,"interviews":interviews,
-        "trade_cps_stores":int(cps_stores),"trade_dtv_stores":int(dtv_stores),
-        "trade_plans":len(tplan),"plus_plans":len(pplan),"mystery_plans":len(mplan),
-        "plus_stores":int(pplan["Mã cửa hàng"].nunique()) if not pplan.empty else 0,
-        "trade_field_done":field_done(tplan),"plus_field_done":field_done(pplan),"mystery_field_done":field_done(mplan),
-        "trade_qc":qc_counts(tplan),"plus_qc":qc_counts(pplan),"mystery_qc":qc_counts(mplan),
+        "trade_plan":tplan_cps,"trade_plan_all":tplan,
+        "plus_plan":pplan,"mystery_plan":mplan,"interviews":interviews,
+        "trade_cps_stores":int(cps_stores),
+        "trade_dtv_stores":0 if round_label=="Lần 2" else int(dtv_stores),
+        "trade_plans":len(tplan_cps),"plus_plans":len(pplan),"mystery_plans":len(mplan),
+        "plus_stores":int(pplan["Mã cửa hàng"].nunique()) if not pplan.empty and "Mã cửa hàng" in pplan.columns else 0,
+        "trade_field_done":field_done(tplan_cps),"plus_field_done":field_done(pplan),"mystery_field_done":field_done(mplan),
+        "trade_qc":qc_counts(tplan_cps),"plus_qc":qc_counts(pplan),"mystery_qc":qc_counts(mplan),
     }
+
+def mystery_by_leader_scenario(m):
+    x = m["mystery_plan"].copy()
+    if x.empty:
+        return pd.DataFrame(columns=["Leader","Kịch bản","Tổng Plan","Field Done","QC Done","QC Pending","Chưa hoàn thành"])
+    x["Leader"] = x["Tên Leader"].fillna("Chưa gán").astype(str).str.strip() if "Tên Leader" in x.columns else "Chưa gán"
+    x["Kịch bản"] = mystery_scenario_series(x)
+    x["_field_done"] = x["Status Plan"].apply(norm).eq("done") if "Status Plan" in x.columns else False
+    x["_qc"] = x["QC Status"].apply(classify_qc) if "QC Status" in x.columns else "NONE"
+    g = x.groupby(["Leader","Kịch bản"], dropna=False).agg(
+        Tổng_Plan=("Tên Plan","nunique"),
+        Field_Done=("_field_done","sum"),
+        QC_Done=("_qc",lambda s:int((s=="DONE").sum())),
+        QC_Pending=("_qc",lambda s:int(s.isin(["PENDING","PENDING_REVIEW"]).sum())),
+    ).reset_index()
+    g["Chưa hoàn thành"] = g["Tổng_Plan"] - g["QC_Done"]
+    return g.rename(columns={"Tổng_Plan":"Tổng Plan","Field_Done":"Field Done","QC_Done":"QC Done","QC_Pending":"QC Pending"})
+
+def store_completion(m, round_label):
+    """
+    1 dòng / cửa hàng:
+    - Trade: all existing L2 CPS plans Field+QC done
+    - Plus: all existing L2 plans Field+QC done
+    - Mystery: all existing Mystery plans Field+QC done
+    Không giả định plan không có trong raw là hoàn thành.
+    """
+    modules = []
+    for mod, key in [("Trade","trade_plan"),("Plus","plus_plan"),("Mystery","mystery_plan")]:
+        x = m[key].copy()
+        if x.empty or "Mã cửa hàng" not in x.columns:
+            continue
+        x = x[x["Mã cửa hàng"].fillna("").astype(str).str.strip().ne("")]
+        if x.empty:
+            continue
+        x["_field_done"] = x["Status Plan"].apply(norm).eq("done") if "Status Plan" in x.columns else False
+        x["_qc_done"] = x["QC Status"].apply(classify_qc).eq("DONE") if "QC Status" in x.columns else False
+        x["Leader"] = x["Tên Leader"].fillna("").astype(str).str.strip() if "Tên Leader" in x.columns else ""
+        g = x.groupby(["Mã cửa hàng","Leader"], dropna=False).agg(
+            Plans=("Tên Plan","nunique"),
+            Field_Done=("_field_done","sum"),
+            QC_Done=("_qc_done","sum"),
+        ).reset_index()
+        g["Module"] = mod
+        modules.append(g)
+
+    if not modules:
+        return pd.DataFrame()
+
+    allm = pd.concat(modules, ignore_index=True)
+    stores = sorted(allm["Mã cửa hàng"].unique())
+    rows = []
+    for store in stores:
+        s = allm[allm["Mã cửa hàng"]==store]
+        leader = next((v for v in s["Leader"] if str(v).strip()), "")
+        row = {"Mã cửa hàng":store,"Leader":leader}
+        overall_parts=[]
+        for mod in ["Trade","Plus","Mystery"]:
+            z=s[s["Module"]==mod]
+            if z.empty:
+                row[f"{mod}"] = "Chưa có data"
+                row[f"{mod} Plan"] = 0
+                continue
+            plans=int(z["Plans"].sum())
+            fd=int(z["Field_Done"].sum())
+            qd=int(z["QC_Done"].sum())
+            done = plans>0 and fd>=plans and qd>=plans
+            row[f"{mod}"] = "✅ Hoàn thành" if done else "⏳ Chưa hoàn thành"
+            row[f"{mod} Plan"] = plans
+            overall_parts.append(done)
+        row["Tổng trạng thái"] = "✅ HOÀN THÀNH" if overall_parts and all(overall_parts) else "⏳ CHƯA HOÀN THÀNH"
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 def leader_summary(m):
     frames=[]
@@ -418,38 +572,62 @@ def render_round(sheets,fname,label):
     tested=int((t35["Đánh giá"]!="CHƯA TRẢ BÀI").sum())
     passed=int((t35["Đánh giá"]=="ĐẠT").sum())
 
-    c1,c2,c3,c4,c5,c6=st.columns(6)
-    c1.metric("Trade CPS Stores",m["trade_cps_stores"])
-    c2.metric("Trade DTV Stores",m["trade_dtv_stores"])
-    c3.metric("Plus Stores",m["plus_stores"])
-    c4.metric("Mystery Field Done",f'{m["mystery_field_done"]} / {MYSTERY_TARGET}')
-    c5.metric("35 NV đã trả bài",f"{tested} / 35")
-    c6.metric("Rework/Reject Plans",
-              m["trade_qc"]["REJECT"]+m["trade_qc"]["REWORK"]+
-              m["plus_qc"]["REJECT"]+m["plus_qc"]["REWORK"]+
-              m["mystery_qc"]["REJECT"]+m["mystery_qc"]["REWORK"])
+    rework_count = (
+        m["trade_qc"]["REJECT"]+m["trade_qc"]["REWORK"]+
+        m["plus_qc"]["REJECT"]+m["plus_qc"]["REWORK"]+
+        m["mystery_qc"]["REJECT"]+m["mystery_qc"]["REWORK"]
+    )
+    if label == "Lần 2":
+        c1,c2,c3,c4,c5=st.columns(5)
+        c1.metric("Trade CPS Stores",m["trade_cps_stores"])
+        c2.metric("Plus Stores",m["plus_stores"])
+        c3.metric("Mystery Field Done",f'{m["mystery_field_done"]} / {MYSTERY_TARGET}')
+        c4.metric("35 NV đã trả bài",f"{tested} / 35")
+        c5.metric("Rework/Reject Plans",rework_count)
+    else:
+        c1,c2,c3,c4,c5,c6=st.columns(6)
+        c1.metric("Trade CPS Stores",m["trade_cps_stores"])
+        c2.metric("Trade DTV Stores",m["trade_dtv_stores"])
+        c3.metric("Plus Stores",m["plus_stores"])
+        c4.metric("Mystery Field Done",f'{m["mystery_field_done"]} / {MYSTERY_TARGET}')
+        c5.metric("35 NV đã trả bài",f"{tested} / 35")
+        c6.metric("Rework/Reject Plans",rework_count)
 
-    tabs=st.tabs(["📊 Executive","🎤 35 NV","📱 94 eSIM","➕ Audit Plus","🕵️ Mystery","👤 Leader","⚠️ Rework","🧪 Validation"])
+    tabs=st.tabs(["📊 Executive","🏪 Shop Status","🎤 35 NV","📱 94 eSIM","➕ Audit Plus","🕵️ Mystery","👤 Leader","⚠️ Rework","🧪 Validation"])
 
     with tabs[0]:
         overview=pd.DataFrame([
-            {"Nghiệp vụ":"Trade","Plan":m["trade_plans"],"Field Done":m["trade_field_done"],"QC Done":m["trade_qc"]["DONE"],"QC Pending":m["trade_qc"]["PENDING"]+m["trade_qc"]["PENDING_REVIEW"],"Reject/Rework":m["trade_qc"]["REJECT"]+m["trade_qc"]["REWORK"]},
+            {"Nghiệp vụ":"Trade CPS" if label=="Lần 2" else "Trade","Plan":m["trade_plans"],"Field Done":m["trade_field_done"],"QC Done":m["trade_qc"]["DONE"],"QC Pending":m["trade_qc"]["PENDING"]+m["trade_qc"]["PENDING_REVIEW"],"Reject/Rework":m["trade_qc"]["REJECT"]+m["trade_qc"]["REWORK"]},
             {"Nghiệp vụ":"Plus","Plan":m["plus_plans"],"Field Done":m["plus_field_done"],"QC Done":m["plus_qc"]["DONE"],"QC Pending":m["plus_qc"]["PENDING"]+m["plus_qc"]["PENDING_REVIEW"],"Reject/Rework":m["plus_qc"]["REJECT"]+m["plus_qc"]["REWORK"]},
-            {"Nghiệp vụ":"Mystery","Plan":m["mystery_plans"],"Field Done":m["mystery_field_done"],"QC Done":m["mystery_qc"]["DONE"],"QC Pending":m["mystery_qc"]["PENDING"]+m["mystery_qc"]["PENDING_REVIEW"],"Reject/Rework":m["mystery_qc"]["REJECT"]+m["mystery_qc"]["REWORK"]},
+            {"Nghiệp vụ":"Mystery (toàn kỳ)","Plan":m["mystery_plans"],"Field Done":m["mystery_field_done"],"QC Done":m["mystery_qc"]["DONE"],"QC Pending":m["mystery_qc"]["PENDING"]+m["mystery_qc"]["PENDING_REVIEW"],"Reject/Rework":m["mystery_qc"]["REJECT"]+m["mystery_qc"]["REWORK"]},
         ])
         st.dataframe(overview,use_container_width=True,hide_index=True)
         st.plotly_chart(px.bar(overview,x="Nghiệp vụ",y=["Field Done","QC Done","QC Pending"],barmode="group",title="Tiến độ plan-level"),use_container_width=True)
 
     with tabs[1]:
+        ss = store_completion(m,label)
+        if selected_leader!="Tất cả" and not ss.empty:
+            ss=ss[ss["Leader"]==selected_leader]
+        q=norm(search)
+        if q and not ss.empty:
+            ss=ss[ss.apply(lambda r:q in norm(r["Mã cửa hàng"]) or q in norm(r["Leader"]),axis=1)]
+        st.subheader("🏪 Trạng thái hoàn thành theo từng cửa hàng")
+        st.caption("Hoàn thành module = tất cả Plan hiện có của module tại shop đều Field Done và QC Done.")
+        st.dataframe(ss,use_container_width=True,hide_index=True,height=650)
+
+    with tabs[2]:
         v=t35.copy()
         if selected_leader!="Tất cả":v=v[v["Leader"]==selected_leader]
         q=norm(search)
         if q:v=v[v.apply(lambda r:q in norm(r["Nhân sự"]) or q in norm(r["Mã cửa hàng"]),axis=1)]
         a,b,c,d=st.columns(4)
-        a.metric("Đã trả bài",tested);b.metric("ĐẠT ≥50",passed);c.metric("Không đạt/Chưa điểm",int(t35["Đánh giá"].isin(["KHÔNG ĐẠT","CHƯA CÓ ĐIỂM"]).sum()));d.metric("Chưa trả bài",int((t35["Đánh giá"]=="CHƯA TRẢ BÀI").sum()))
+        a.metric("Đã trả bài",tested)
+        b.metric("ĐẠT (49.99→50)",passed)
+        c.metric("Không đạt/Chưa điểm",int(t35["Đánh giá"].isin(["KHÔNG ĐẠT","CHƯA CÓ ĐIỂM"]).sum()))
+        d.metric("Chưa trả bài",int((t35["Đánh giá"]=="CHƯA TRẢ BÀI").sum()))
         st.dataframe(v,use_container_width=True,hide_index=True,height=600)
 
-    with tabs[2]:
+    with tabs[3]:
         v=t94.copy()
         if selected_leader!="Tất cả":v=v[v["Leader"]==selected_leader]
         if selected_region!="Tất cả":v=v[v["Miền"]==selected_region]
@@ -457,25 +635,40 @@ def render_round(sheets,fname,label):
         if q:v=v[v.apply(lambda r:q in norm(r["MSNV"]) or q in norm(r["Họ và Tên"]) or q in norm(r["Shop"]),axis=1)]
         st.dataframe(v,use_container_width=True,hide_index=True,height=600)
 
-    with tabs[3]:
+    with tabs[4]:
         st.caption(f'Có nhân viên trả bài: {len(m["interviews"])} / {m["plus_plans"]} plan Plus')
         st.dataframe(m["interviews"],use_container_width=True,hide_index=True,height=620)
 
-    with tabs[4]:
-        mp=m["mystery_plan"].copy()
-        st.metric("Mystery unique Plan",m["mystery_plans"])
-        a,b,c=st.columns(3)
-        a.metric("Field Done",m["mystery_field_done"]);b.metric("QC Done",m["mystery_qc"]["DONE"]);c.metric("QC Pending",m["mystery_qc"]["PENDING"]+m["mystery_qc"]["PENDING_REVIEW"])
-        cols=[c for c in ["Tên Plan","Mã cửa hàng","Tên Leader","Status Plan","QC Status","Ngày update","Ngày thực hiện","Hạng mục"] if c in mp.columns]
-        st.dataframe(mp[cols],use_container_width=True,hide_index=True,height=600)
-
     with tabs[5]:
+        mp=m["mystery_plan"].copy()
+        scen=mystery_by_leader_scenario(m)
+        if selected_leader!="Tất cả" and not scen.empty:
+            scen=scen[scen["Leader"]==selected_leader]
+
+        a,b,c,d=st.columns(4)
+        a.metric("Mystery unique Plan",m["mystery_plans"])
+        b.metric("Field Done",m["mystery_field_done"])
+        c.metric("QC Done",m["mystery_qc"]["DONE"])
+        d.metric("QC Pending",m["mystery_qc"]["PENDING"]+m["mystery_qc"]["PENDING_REVIEW"])
+
+        st.markdown("#### Kịch bản theo từng Leader")
+        st.dataframe(scen,use_container_width=True,hide_index=True)
+
+        if not scen.empty:
+            fig=px.bar(scen,x="Leader",y="Tổng Plan",color="Kịch bản",barmode="stack",title="Cơ cấu kịch bản Mystery theo Leader")
+            st.plotly_chart(fig,use_container_width=True)
+
+        st.markdown("#### Chi tiết Plan Mystery")
+        cols=[c for c in ["Tên Plan","Mã cửa hàng","Tên Leader","Hạng mục","Status Plan","QC Status","Ngày update","Ngày thực hiện"] if c in mp.columns]
+        st.dataframe(mp[cols],use_container_width=True,hide_index=True,height=560)
+
+    with tabs[6]:
         ls=leader_summary(m)
         st.dataframe(ls,use_container_width=True,hide_index=True)
         if not ls.empty:
             st.plotly_chart(px.bar(ls,x="Leader",y=["QC_Done","QC_Pending","QC_Reject_Rework"],barmode="stack",title="QC theo unique Plan"),use_container_width=True)
 
-    with tabs[6]:
+    with tabs[7]:
         parts=[]
         for key,name in [("trade_plan","Trade"),("plus_plan","Plus"),("mystery_plan","Mystery")]:
             x=m[key]
@@ -486,20 +679,24 @@ def render_round(sheets,fname,label):
                 r["Nghiệp vụ"]=name
                 parts.append(r)
         rw=pd.concat(parts,ignore_index=True) if parts else pd.DataFrame()
-        st.dataframe(rw,use_container_width=True,hide_index=True,height=600)
+        if rw.empty:
+            st.success("Không có Plan Rework/Reject theo dữ liệu hiện tại.")
+        else:
+            st.dataframe(rw,use_container_width=True,hide_index=True,height=600)
 
-    with tabs[7]:
+    with tabs[8]:
+        mystery_sheet_found = any("mystery" in norm(n) for n in sheets)
         checks=pd.DataFrame([
-            {"Check":"Trade Audit sheet","Value":"PASS" if "Trade Audit" in sheets else "FAIL"},
-            {"Check":"Trade Audit Plus sheet","Value":"PASS" if "Trade Audit Plus" in sheets else "FAIL"},
-            {"Check":"Mystery Audit sheet","Value":"PASS" if "Mystery Audit" in sheets else "FAIL"},
-            {"Check":f"Round {label} Trade plans","Value":m["trade_plans"]},
+            {"Check":"Trade Audit sheet","Value":"PASS" if any("trade audit" in norm(n) and "plus" not in norm(n) for n in sheets) else "FAIL"},
+            {"Check":"Trade Audit Plus sheet","Value":"PASS" if any("trade" in norm(n) and "plus" in norm(n) for n in sheets) else "FAIL"},
+            {"Check":"Mystery sheet","Value":"PASS" if mystery_sheet_found else "FAIL"},
+            {"Check":f"Round {label} Trade CPS plans","Value":m["trade_plans"]},
             {"Check":f"Round {label} Plus plans","Value":m["plus_plans"]},
-            {"Check":f"Round {label} Mystery plans","Value":m["mystery_plans"]},
+            {"Check":"Mystery plans (không filter L1/L2)","Value":m["mystery_plans"]},
             {"Check":"Master 35 store có ...","Value":"FAIL" if any("..." in x["Mã cửa hàng"] for x in TARGET_35_NV_MASTER) else "PASS"},
         ])
         st.dataframe(checks,use_container_width=True,hide_index=True)
-        st.info("QC workload hiện đếm unique Plan, không đếm từng dòng KPI/câu hỏi. Tên người phỏng vấn lấy từ TT1 → Câu trả lời.")
+        st.info("V3.4: L2 bỏ DTV; Mystery đọc toàn kỳ; QC đếm unique Plan; 49.99 làm tròn 50 = ĐẠT.")
 
 if view=="📊 CEO VIEW":
     l1,n1=get_round("l1");l2,n2=get_round("l2")
@@ -507,9 +704,12 @@ if view=="📊 CEO VIEW":
     for label,sheets,name in [("Lần 1",l1,n1),("Lần 2",l2,n2)]:
         if sheets is None:continue
         m=metrics(sheets,label)
-        rows.append({"Đợt":label,"Trade CPS":m["trade_cps_stores"],"Trade DTV":m["trade_dtv_stores"],"Plus Stores":m["plus_stores"],
-                     "Mystery Field Done":m["mystery_field_done"],"Mystery QC Done":m["mystery_qc"]["DONE"],
-                     "Trade QC Done":m["trade_qc"]["DONE"],"Plus QC Done":m["plus_qc"]["DONE"]})
+        row={"Đợt":label,"Trade CPS":m["trade_cps_stores"],"Plus Stores":m["plus_stores"],
+             "Mystery Field Done":m["mystery_field_done"],"Mystery QC Done":m["mystery_qc"]["DONE"],
+             "Trade QC Done":m["trade_qc"]["DONE"],"Plus QC Done":m["plus_qc"]["DONE"]}
+        if label!="Lần 2":
+            row["Trade DTV"]=m["trade_dtv_stores"]
+        rows.append(row)
     if not rows:st.info("Nạp L1/L2 để so sánh.")
     else:
         df=pd.DataFrame(rows);st.dataframe(df,use_container_width=True,hide_index=True)
