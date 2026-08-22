@@ -681,4 +681,4 @@ elif target_sheets is not None:
     except Exception as e:
         st.error(f"Lỗi đọc dữ liệu: {e}")
 else:
-    st.info("👋 Chưa tìm thấy dữ liệu báo cáo cho màn hình này. Vui lòng nạp file Excel ở thanh 
+    st.info("👋 Chưa tìm thấy dữ liệu báo cáo cho màn hình này. Vui lòng nạp file Excel ở thanh Sidebar bên trái!")
