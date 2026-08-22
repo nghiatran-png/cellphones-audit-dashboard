@@ -3,17 +3,23 @@ import pandas as pd
 import unicodedata
 import os
 import io
+import plotly.express as px
 
 # 1. Cấu hình giao diện Streamlit Enterprise
 st.set_page_config(
-    page_title="CellphoneS Audit Platform - Lần 1 & Lần 2", 
+    page_title="CellphoneS Audit Platform V3.1 - Lần 1 & Lần 2", 
     page_icon="📱", 
     layout="wide"
 )
 
 # File lưu trữ dữ liệu riêng cho 2 đợt
-PERSISTENT_L1 = "latest_report_l1.xlsx"
-PERSISTENT_L2 = "latest_report_l2.xlsx"
+APP_VERSION = "3.1.0"
+PASS_SCORE = 50
+MYSTERY_TARGET = 153
+
+for _k in ["l1_bytes", "l1_name", "l2_bytes", "l2_name"]:
+    if _k not in st.session_state:
+        st.session_state[_k] = None
 
 # Custom CSS thương hiệu CellphoneS
 st.markdown("""
@@ -44,8 +50,26 @@ st.markdown("""
 
 # Hàm chuẩn hóa chuỗi / khử dấu Tiếng Việt
 def norm(text):
-    if not isinstance(text, str): return ""
-    return unicodedata.normalize('NFD', text).encode('ascii', 'ignore').decode('utf-8').lower().replace("-", "").replace(" ", "").strip()
+    if pd.isna(text):
+        return ""
+    text = str(text).replace("\u200b", "").replace("\ufeff", "").strip()
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+def norm_code(value):
+    return "" if pd.isna(value) else str(value).strip().upper()
+
+def find_col(columns, aliases):
+    aliases_n = [norm(a) for a in aliases]
+    for c in columns:
+        if norm(c) in aliases_n:
+            return c
+    for c in columns:
+        nc = norm(c)
+        if any(a and a in nc for a in aliases_n):
+            return c
+    return None
 
 # Master 35 Nhân sự cố định Lần 1
 TARGET_35_NV_MASTER = [
@@ -205,13 +229,99 @@ def style_note_35(val):
         return "background-color: #fff3cd; color: #856404; font-weight: bold;"
     return ""
 
-@st.cache_data(show_spinner=False)
-def load_all_sheets(file_bytes_or_path):
-    xls = pd.ExcelFile(file_bytes_or_path)
-    sheets_dict = {}
-    for s in xls.sheet_names:
-        sheets_dict[s] = pd.read_excel(xls, s)
-    return sheets_dict
+@st.cache_data(show_spinner=False, max_entries=4)
+def load_all_sheets(file_bytes):
+    bio = io.BytesIO(file_bytes)
+    xls = pd.ExcelFile(bio)
+    return {name: pd.read_excel(io.BytesIO(file_bytes), sheet_name=name) for name in xls.sheet_names}
+
+def save_upload(uploaded, prefix):
+    if uploaded is None:
+        return
+    st.session_state[f"{prefix}_bytes"] = uploaded.getvalue()
+    st.session_state[f"{prefix}_name"] = uploaded.name
+
+def get_round_data(prefix):
+    data = st.session_state.get(f"{prefix}_bytes")
+    name = st.session_state.get(f"{prefix}_name")
+    return (load_all_sheets(data), name) if data else (None, None)
+
+def derive_store_series(df):
+    c = find_col(df.columns, ["Mã cửa hàng", "Store Code", "Store ID", "Shop", "Mã CH"])
+    if c:
+        return df[c].apply(norm_code)
+    c_plan = find_col(df.columns, ["Tên Plan", "Plan Name", "Plan"])
+    if c_plan:
+        return df[c_plan].fillna("").astype(str).str.extract(r"((?:CPS|DTV)-[A-Za-z0-9/.-]+)", expand=False).fillna("").str.upper()
+    return pd.Series([""] * len(df), index=df.index)
+
+def compute_progress_metrics(sheets):
+    m = {"trade_cps": 0, "trade_dtv": 0, "plus_stores": 0, "mystery_plans": 0, "qc_done": 0, "qc_pending": 0, "rework": 0}
+    for sname, df in sheets.items():
+        if df.empty:
+            continue
+        sn = norm(sname)
+        stores = derive_store_series(df)
+        c_qc = find_col(df.columns, ["QC Status", "Trạng thái QC", "Kết quả QC"])
+        if c_qc:
+            q = df[c_qc].fillna("").astype(str).str.lower()
+            m["qc_done"] += int(q.isin(["done", "pass", "passed", "approved", "ok"]).sum())
+            m["qc_pending"] += int(q.str.contains("pending|chờ|cho duyet", regex=True, na=False).sum())
+            m["rework"] += int(q.str.contains("rework|reject|refuse|fail|bổ sung|bo sung|ycbs", regex=True, na=False).sum())
+        if "trade" in sn and "plus" not in sn:
+            valid = stores[stores.ne("")]
+            m["trade_cps"] = max(m["trade_cps"], int(valid[valid.str.startswith("CPS-")].nunique()))
+            m["trade_dtv"] = max(m["trade_dtv"], int(valid[valid.str.startswith("DTV-")].nunique()))
+        if "plus" in sn:
+            m["plus_stores"] = max(m["plus_stores"], int(stores[stores.ne("")].nunique()))
+        if "mystery" in sn:
+            c_plan = find_col(df.columns, ["Tên Plan", "Plan Name", "Plan"])
+            if c_plan:
+                m["mystery_plans"] = max(m["mystery_plans"], int(df[c_plan].dropna().astype(str).str.strip().replace("", pd.NA).dropna().nunique()))
+    return m
+
+def build_leader_summary(sheets, tested_dict):
+    rows = []
+    for leader in ["Giang Văn Huy", "Ngô Tuấn Cảnh", "Trần Trung Nghĩa", "Vũ Hoài Nam", "Đỗ Quang Tiến"]:
+        stores, done, pending, rework = set(), 0, 0, 0
+        for _, df in sheets.items():
+            c_lead = find_col(df.columns, ["Leader", "Lead", "Leader Phụ Trách", "Quản lý"])
+            if not c_lead:
+                continue
+            mask = df[c_lead].fillna("").astype(str).str.strip().eq(leader)
+            if not mask.any():
+                continue
+            ss = derive_store_series(df.loc[mask])
+            stores.update(x for x in ss if x)
+            c_qc = find_col(df.columns, ["QC Status", "Trạng thái QC", "Kết quả QC"])
+            if c_qc:
+                q = df.loc[mask, c_qc].fillna("").astype(str).str.lower()
+                done += int(q.isin(["done", "pass", "passed", "approved", "ok"]).sum())
+                pending += int(q.str.contains("pending|chờ|cho duyet", regex=True, na=False).sum())
+                rework += int(q.str.contains("rework|reject|refuse|fail|bổ sung|bo sung|ycbs", regex=True, na=False).sum())
+        tt1 = sum(1 for v in tested_dict.values() if v.get("Leader") == leader)
+        rows.append({"Leader": leader, "Shop nhận diện": len(stores), "QC Done rows": done, "QC Pending rows": pending, "Rework rows": rework, "35 NV đã trả bài": tt1})
+    return pd.DataFrame(rows)
+
+def build_mystery_summary(sheets):
+    frames = []
+    for sname, df in sheets.items():
+        if "mystery" not in norm(sname) or df.empty:
+            continue
+        c_plan = find_col(df.columns, ["Tên Plan", "Plan Name", "Plan"])
+        c_lead = find_col(df.columns, ["Leader", "Lead", "Leader Phụ Trách"])
+        if not c_plan:
+            continue
+        tmp = pd.DataFrame({"Plan": df[c_plan].fillna("").astype(str).str.strip(), "Leader": df[c_lead].fillna("Chưa gán").astype(str).str.strip() if c_lead else "Chưa gán"})
+        tmp = tmp[tmp["Plan"].ne("")].drop_duplicates(["Plan"])
+        frames.append(tmp)
+    if not frames:
+        return pd.DataFrame(columns=["Leader", "Hoàn thành", "Tỷ trọng"])
+    x = pd.concat(frames, ignore_index=True).drop_duplicates(["Plan"])
+    out = x.groupby("Leader", dropna=False).size().reset_index(name="Hoàn thành")
+    total = int(out["Hoàn thành"].sum())
+    out["Tỷ trọng"] = out["Hoàn thành"].apply(lambda v: f"{v/total:.1%}" if total else "0%")
+    return out.sort_values("Hoàn thành", ascending=False)
 
 # --- SIDEBAR QUẢN TRỊ MÀN HÌNH ĐỘC LẬP LẦN 1 & LẦN 2 ---
 with st.sidebar:
@@ -232,15 +342,13 @@ with st.sidebar:
     
     up_l1 = st.file_uploader("Nạp Excel Raw Data (LẦN 1):", type=["xlsx", "xls"], key="up1")
     if up_l1 is not None:
-        with open(PERSISTENT_L1, "wb") as f:
-            f.write(up_l1.getbuffer())
-        st.success("✅ Đã lưu file Màn hình Lần 1!")
+        save_upload(up_l1, "l1")
+        st.success(f"✅ L1 đã refresh: {up_l1.name}")
 
     up_l2 = st.file_uploader("Nạp Excel Raw Data (LẦN 2):", type=["xlsx", "xls"], key="up2")
     if up_l2 is not None:
-        with open(PERSISTENT_L2, "wb") as f:
-            f.write(up_l2.getbuffer())
-        st.success("✅ Đã lưu file Màn hình Lần 2!")
+        save_upload(up_l2, "l2")
+        st.success(f"✅ L2 đã refresh: {up_l2.name}")
 
     st.write("---")
     st.markdown("### 🔍 BỘ LỌC CHI TIẾT")
@@ -252,44 +360,49 @@ header_sub = "Đang hiển thị Màn hình Lần 1" if "LẦN 1" in view_mode e
 st.markdown(f"""
     <div class="cps-header">
         <div class="cps-title">📱 CELLPHONES ENTERPRISE AUDIT — {view_mode}</div>
-        <div class="cps-subtitle">{header_sub} (Dữ liệu độc lập 24/7)</div>
+        <div class="cps-subtitle">{header_sub} (Session-safe • v3.1.0)</div>
     </div>
 """, unsafe_allow_html=True)
 
-target_file_path = PERSISTENT_L1 if "LẦN 1" in view_mode else (PERSISTENT_L2 if "LẦN 2" in view_mode else None)
+target_key = "l1" if "LẦN 1" in view_mode else ("l2" if "LẦN 2" in view_mode else None)
+target_sheets, target_file_name = get_round_data(target_key) if target_key else (None, None)
 
 if view_mode == "📊 TỔNG HỢP SO SÁNH 2 LẦN (CEO VIEW)":
-    st.subheader("📊 Màn Hình So Sánh Tiến Độ Lần 1 vs Lần 2 Dành Cho CEO")
-    has_l1 = os.path.exists(PERSISTENT_L1)
-    has_l2 = os.path.exists(PERSISTENT_L2)
-    
+    sheets_l1, name_l1 = get_round_data("l1")
+    sheets_l2, name_l2 = get_round_data("l2")
+    has_l1 = sheets_l1 is not None
+    has_l2 = sheets_l2 is not None
     col1, col2 = st.columns(2)
     with col1:
-        st.info("📌 **TRẠNG THÁI MÀN HÌNH LẦN 1:** " + ("🟢 Đã có dữ liệu" if has_l1 else "🔴 Chưa có file"))
+        st.info("📌 **LẦN 1:** " + (f"🟢 {name_l1}" if has_l1 else "🔴 Chưa nạp file"))
     with col2:
-        st.info("📌 **TRẠNG THÁI MÀN HÌNH LẦN 2:** " + ("🟢 Đã có dữ liệu" if has_l2 else "🔴 Chưa có file"))
-        
-    st.write("---")
-    ceo_summary = [
-        {"Hạng Mục Audit": "Trade Audit CPS", "Tiến độ Lần 1": "174 / 174 CH (100%)", "Tiến độ Lần 2": "174 / 174 CH (Đang làm)", "Đánh giá CEO": "Đạt Kế Hoạch"},
-        {"Hạng Mục Audit": "Trade Audit DTV", "Tiến độ Lần 1": "29 / 32 CH (90.6%)", "Tiến độ Lần 2": "32 / 32 CH (100%)", "Đánh giá CEO": "Hoàn Thành L2"},
-        {"Hạng Mục Audit": "35 NV Trả bài Đợt 1 (TT1)", "Tiến độ Lần 1": "Chấm điểm >=50 Đạt", "Tiến độ Lần 2": "Phỏng vấn bổ sung L2", "Đánh giá CEO": "Đang đợt 2"},
-        {"Hạng Mục Audit": "94 NV Esim L1 Fail", "Tiến độ Lần 1": "94 NV Chưa Đạt L1", "Tiến độ Lần 2": "Đang chấm Lần 2", "Đánh giá CEO": "Đang đợt 2"},
-        {"Hạng Mục Audit": "Mystery Shopper (153 Kịch bản)", "Tiến độ Lần 1": "65 / 153 Kịch bản", "Tiến độ Lần 2": "Hạn chót 25/08", "Đánh giá CEO": "Cần đẩy nhanh"}
-    ]
-    st.dataframe(pd.DataFrame(ceo_summary), use_container_width=True, hide_index=True)
+        st.info("📌 **LẦN 2:** " + (f"🟢 {name_l2}" if has_l2 else "🔴 Chưa nạp file"))
+    if has_l1 or has_l2:
+        p1 = compute_progress_metrics(sheets_l1) if has_l1 else {}
+        p2 = compute_progress_metrics(sheets_l2) if has_l2 else {}
+        rows = []
+        labels = [("trade_cps","Trade Audit CPS"),("trade_dtv","Trade Audit DTV"),("plus_stores","Audit Plus Store"),("mystery_plans","Mystery unique Plan"),("qc_done","QC Done rows"),("rework","Rework/Reject rows")]
+        for key, label in labels:
+            v1, v2 = p1.get(key,0), p2.get(key,0)
+            rows.append({"Hạng mục":label,"Lần 1":v1,"Lần 2":v2,"Chênh lệch L2-L1":v2-v1})
+        ceo_df = pd.DataFrame(rows)
+        st.dataframe(ceo_df, use_container_width=True, hide_index=True)
+        st.plotly_chart(px.bar(ceo_df, x="Hạng mục", y=["Lần 1","Lần 2"], barmode="group", title="So sánh L1 vs L2 từ dữ liệu thực"), use_container_width=True)
+    else:
+        st.warning("Chưa có dữ liệu L1/L2 để so sánh.")
 
-elif target_file_path and os.path.exists(target_file_path):
+elif target_sheets is not None:
+
     try:
-        sheets_data = load_all_sheets(target_file_path)
+        sheets_data = target_sheets
 
         search_query = st.text_input("🔎 TRA CỨU NHANH (Nhập Mã NV / Tên Nhân Sự / Mã Cửa Hàng):", "").strip()
 
         # 1. ĐỐI SOÁT 35 NV MASTER (SỬA LỖI ĐỂ TÍNH ĐÚNG KẾT QUẢ VÀ TỰ ĐỘNG HIGHLIGHT PV LẦN 2)
         tested_dict = {}
         for sheet_name, df in sheets_data.items():
-            c_name = next((c for c in df.columns if any(k in norm(c) for k in ['nhansu', 'ten', 'hovataten', 'batbuoc', 'nhanvien'])), None)
-            c_score = next((c for c in df.columns if any(k in norm(c) for k in ['diem', 'score', 'trabai', 'ketqua'])), None)
+            c_name = find_col(df.columns, ['Nhân sự', 'Tên nhân viên', 'Họ và tên', 'Tên NV'])
+            c_score = find_col(df.columns, ['Điểm trả bài', 'Score', 'Thực đạt'])
             c_status = next((c for c in df.columns if any(k in norm(c) for k in ['qcstatus', 'trangthai', 'status'])), None)
             c_date = next((c for c in df.columns if any(k in norm(c) for k in ['ngay', 'date', 'thoigian'])), None)
 
@@ -307,18 +420,21 @@ elif target_file_path and os.path.exists(target_file_path):
 
                     for item in TARGET_35_NV_MASTER:
                         if selected_leader != "Tất cả" and item["Leader"] != selected_leader: continue
-                        match_name = (norm(item["Tên"]) in v_name or v_name in norm(item["Tên"])) if v_name else False
+                        match_name = (norm(item["Tên"]) == v_name) if v_name else False
 
                         if match_name:
                             # Sửa chuẩn quy tắc điểm >= 50
                             if v_score is not None:
-                                eval_text = "ĐẠT" if v_score >= 50 else "KHÔNG ĐẠT"
-                            elif "done" in v_st.lower() or "pass" in v_st.lower() or "ok" in v_st.lower():
-                                eval_text = "ĐẠT"
+                                eval_text = "ĐẠT" if v_score >= PASS_SCORE else "KHÔNG ĐẠT"
                             else:
-                                eval_text = "KHÔNG ĐẠT"
+                                eval_text = "CHƯA CÓ ĐIỂM"
 
-                            note_pv2 = "Bắt buộc phỏng vấn lần 2" if eval_text == "KHÔNG ĐẠT" else "Đã hoàn thành L1"
+                            if eval_text == "ĐẠT":
+                                note_pv2 = "Đã hoàn thành"
+                            elif eval_text == "KHÔNG ĐẠT":
+                                note_pv2 = "Bắt buộc trả/phỏng vấn lại"
+                            else:
+                                note_pv2 = "Cần xác minh điểm - không suy từ QC Status"
 
                             tested_dict[item["Tên"]] = {
                                 "Leader": item["Leader"],
@@ -326,7 +442,7 @@ elif target_file_path and os.path.exists(target_file_path):
                                 "Đánh giá": eval_text,
                                 "Ghi chú PV2": note_pv2,
                                 "QC Status": v_st if v_st else "done",
-                                "Ngày thực hiện": v_dt if v_dt != "nan" else "13/08/2026"
+                                "Ngày thực hiện": v_dt if v_dt != "nan" else "None"
                             }
 
         # 2. ĐỐI SOÁT 94 NV KHÔNG ĐẠT ESIM L1 (LẦN CHẤM 02)
@@ -347,7 +463,7 @@ elif target_file_path and os.path.exists(target_file_path):
 
                 for item94 in TARGET_94_ESIM_L1:
                     m_code = (norm(item94["MSNV"]) == v_msnv) if v_msnv else False
-                    m_name = (norm(item94["Tên"]) in v_name or v_name in norm(item94["Tên"])) if v_name else False
+                    m_name = (norm(item94["Tên"]) == v_name) if v_name else False
                     
                     if m_code or m_name:
                         l2_lower = v_l2_raw.lower()
@@ -366,12 +482,14 @@ elif target_file_path and os.path.exists(target_file_path):
                         }
 
         # --- TOP METRICS HEADER ---
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Trade Audit", "203 / 206 CH")
-        m2.metric("Data Plus", "174 / 174 CH")
-        m3.metric("Mystery Kịch Bản", "65 / 153 Kịch bản") # Đếm chuẩn theo 153 Kịch bản
-        m4.metric("35 NV Trả Bài (TT1)", f"{len(tested_dict)} / 35 NV")
-        m5.metric("94 NV Esim L1 (Lần 2)", f"{len(esim_l2_dict)} / 94 NV")
+        progress = compute_progress_metrics(sheets_data)
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("Trade CPS Stores", progress["trade_cps"])
+        m2.metric("Trade DTV Stores", progress["trade_dtv"])
+        m3.metric("Plus Stores", progress["plus_stores"])
+        m4.metric("Mystery", f'{progress["mystery_plans"]} / {MYSTERY_TARGET}')
+        m5.metric("35 NV đã có dữ liệu", f"{len(tested_dict)} / 35")
+        m6.metric("Rework / Reject", progress["rework"])
 
         st.divider()
 
@@ -387,23 +505,12 @@ elif target_file_path and os.path.exists(target_file_path):
 
         # --- TAB 1: TỔNG HỢP LEADER (CẬP NHẬT CHUẨN SỐ LƯỢNG GỐC THEO TỪNG LEADER) ---
         with t_pivot:
-            st.subheader(f"📌 Báo Cáo Tổng Hợp Tiến Độ Field & QC Theo Leader ({view_mode})")
-            lead_names = ["Giang Văn Huy", "Ngô Tuấn Cảnh", "Trần Trung Nghĩa", "Vũ Hoài Nam", "Đỗ Quang Tiến"]
-            tt1_counts = {l: sum(1 for v in tested_dict.values() if v["Leader"] == l) for l in lead_names}
-            
-            row_nv_label = "NV_TT1_Tra_Bai (Đợt 1)" if "LẦN 1" in view_mode else "NV_TT1_Tra_Bai (Đợt 2)"
-
-            # Phân bổ chuẩn gốc: Nghĩa 19, Nam 9, Tiến 6, Huy 1, Cảnh 0
-            pivot_data = {
-                "Chỉ số Progress": ["CH_CPS_Hoan_Tat", "CH_DTV_Hoan_Tat", "Tong_CH", "Field_DONE", "Field_CHUA_DONE", "% Field", "QC_DONE", "% QC", row_nv_label],
-                "Giang Văn Huy": ["3 / 3", "0 / 0", 3, 3, 0, "100.0%", 3, "100.0%", f"{tt1_counts['Giang Văn Huy']} / 1"],
-                "Ngô Tuấn Cảnh": ["23 / 23", "0 / 0", 23, 23, 0, "100.0%", 23, "100.0%", f"{tt1_counts['Ngô Tuấn Cảnh']} / 0"],
-                "Trần Trung Nghĩa": ["54 / 54", "20 / 20", 74, 74, 0, "100.0%", 74, "100.0%", f"{tt1_counts['Trần Trung Nghĩa']} / 19"],
-                "Vũ Hoài Nam": ["37 / 37", "7 / 10", 47, 44, 3, "93.6%", 44, "93.6%", f"{tt1_counts['Vũ Hoài Nam']} / 9"],
-                "Đỗ Quang Tiến": ["57 / 57", "2 / 2", 59, 59, 0, "100.0%", 59, "100.0%", f"{tt1_counts['Đỗ Quang Tiến']} / 6"],
-                "TOTAL": ["174 / 174", "29 / 32", 206, 203, 3, "98.5%", 203, "98.5%", f"{len(tested_dict)} / 35"]
-            }
-            st.dataframe(pd.DataFrame(pivot_data), use_container_width=True, hide_index=True)
+            st.subheader(f"📌 Tiến độ & chất lượng theo Leader ({view_mode})")
+            leader_df = build_leader_summary(sheets_data, tested_dict)
+            st.dataframe(leader_df, use_container_width=True, hide_index=True)
+            if not leader_df.empty:
+                fig_lead = px.bar(leader_df, x="Leader", y=["QC Done rows", "QC Pending rows", "Rework rows"], barmode="stack", title="QC workload theo Leader")
+                st.plotly_chart(fig_lead, use_container_width=True)
 
         # --- TAB 2: 35 NV TRẢ BÀI CÓ HIGHLIGHT PHỎNG VẤN LẦN 2 ---
         with t_35nv:
@@ -411,6 +518,7 @@ elif target_file_path and os.path.exists(target_file_path):
 
             count_pass_35 = sum(1 for v in tested_dict.values() if v["Đánh giá"] == "ĐẠT")
             count_fail_35 = sum(1 for v in tested_dict.values() if v["Đánh giá"] == "KHÔNG ĐẠT")
+            count_unknown_score_35 = sum(1 for v in tested_dict.values() if v["Đánh giá"] == "CHƯA CÓ ĐIỂM")
             count_not_35 = 35 - len(tested_dict)
 
             df_kpi = pd.DataFrame([
@@ -418,7 +526,8 @@ elif target_file_path and os.path.exists(target_file_path):
                 {"Chỉ số": "Đã có dữ liệu trả bài", "Kết quả": len(tested_dict)},
                 {"Chỉ số": "ĐẠT (>=50 điểm)", "Kết quả": count_pass_35},
                 {"Chỉ số": "KHÔNG ĐẠT (<50 điểm)", "Kết quả": count_fail_35},
-                {"Chỉ số": "CHƯA TRẢ BÀI (Bắt buộc PV Lần 2)", "Kết quả": count_not_35 + count_fail_35}
+                {"Chỉ số": "CHƯA CÓ ĐIỂM (cần xác minh)", "Kết quả": count_unknown_score_35},
+                {"Chỉ số": "CẦN ACTION / PV L2", "Kết quả": count_not_35 + count_fail_35 + count_unknown_score_35}
             ])
             
             c_kpi, _ = st.columns([1, 1])
@@ -487,7 +596,7 @@ elif target_file_path and os.path.exists(target_file_path):
                 msnv = item94["MSNV"]
                 name_norm = norm(item94["Tên"])
 
-                matched_35 = next((t for t in TARGET_35_NV_MASTER if norm(t["Tên"]) in name_norm or name_norm in norm(t["Tên"])), None)
+                matched_35 = next((t for t in TARGET_35_NV_MASTER if norm(t["Tên"]) == name_norm), None)
                 if matched_35:
                     nv_35_name = matched_35["Tên"]
                     if nv_35_name in tested_dict:
@@ -526,19 +635,7 @@ elif target_file_path and os.path.exists(target_file_path):
             if s_plus_key:
                 st.dataframe(sheets_data[s_plus_key], use_container_width=True)
             else:
-                sample_plus_summary = [
-                    {"STT": 1, "Shop": "CPS-AGI-CDO-272LL", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 1, "Hoàn tất QC": 3},
-                    {"STT": 2, "Shop": "CPS-AGI-LXG-1393THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                    {"STT": 3, "Shop": "CPS-AGI-LXG-912THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                    {"STT": 4, "Shop": "CPS-AGI-RGI-405NTT", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": 1, "Hoàn tất QC": 2},
-                    {"STT": 5, "Shop": "CPS-BDI-QNH-669THD", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                    {"STT": 6, "Shop": "CPS-BDU-DAN-253NAN", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": "", "Hoàn tất QC": 3},
-                    {"STT": 7, "Shop": "CPS-BDU-TAN-100NVT", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 2, "Hoàn tất QC": 3},
-                    {"STT": 8, "Shop": "CPS-BDU-TAN-63HHMH", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                    {"STT": 9, "Shop": "CPS-BDU-TAU-156DT747", "Lần": 1, "QC Status": "2/2", "Field hoàn tất count": 2, "QC trả về": "", "Hoàn tất QC": 2},
-                    {"STT": 10, "Shop": "CPS-BDU-TDM-183PL", "Lần": 1, "QC Status": "3/3", "Field hoàn tất count": 3, "QC trả về": 3, "Hoàn tất QC": 3}
-                ]
-                st.dataframe(pd.DataFrame(sample_plus_summary), use_container_width=True, hide_index=True)
+                st.warning("Không tìm thấy sheet Audit Plus trong file hiện tại. Không hiển thị dữ liệu mẫu giả.")
 
         # --- TAB 5: YÊU CẦU BỔ SUNG ---
         with t_rework:
@@ -570,17 +667,18 @@ elif target_file_path and os.path.exists(target_file_path):
         with t_mystery:
             st.subheader("🕵️ Báo Cáo Tiến Độ Mystery Shopper (Tổng 153 Kịch Bản Đo Lường)")
             
-            mystery_leader_summary = [
-                {"Leader": "Giang Văn Huy", "Tổng Kịch Bản": 8, "iPhone Cũ": 2, "Laptop": 2, "Android": 2, "iPhone 17 Pro Max": 2, "Hoàn Thành": 8, "Trạng Thái": "Đã hoàn tất 100%"},
-                {"Leader": "Ngô Tuấn Cảnh", "Tổng Kịch Bản": 28, "iPhone Cũ": 7, "Laptop": 7, "Android": 7, "iPhone 17 Pro Max": 7, "Hoàn Thành": 28, "Trạng Thái": "Đã hoàn tất 100%"},
-                {"Leader": "Trần Trung Nghĩa", "Tổng Phân Bổ": 55, "iPhone Cũ": 15, "Laptop": 12, "Android": 10, "iPhone 17 Pro Max": 0, "Hoàn Thành": 37, "Trạng Thái": "Còn thiếu 18 bài"},
-                {"Leader": "Vũ Hoài Nam", "Tổng Phân Bổ": 38, "iPhone Cũ": 6, "Laptop": 6, "Android": 0, "iPhone 17 Pro Max": 0, "Hoàn Thành": 12, "Trạng Thái": "Còn thiếu 26 bài"},
-                {"Leader": "Đỗ Quang Tiến", "Tổng Phân Bổ": 24, "iPhone Cũ": 4, "Laptop": 4, "Android": 0, "iPhone 17 Pro Max": 0, "Hoàn Thành": 8, "Trạng Thái": "Còn thiếu 16 bài"},
-                {"TOTAL": "TỔNG NGUYÊN DỰ ÁN", "Tổng Kịch Bản": 153, "iPhone Cũ": 34, "Laptop": 31, "Android": 19, "iPhone 17 Pro Max": 9, "Hoàn Thành": 93, "Trạng Thái": "Cần hoàn thành 60 bài"}
-            ]
-            st.dataframe(pd.DataFrame(mystery_leader_summary), use_container_width=True, hide_index=True)
+            mystery_df = build_mystery_summary(sheets_data)
+            if mystery_df.empty:
+                st.warning("Không nhận diện được dữ liệu Mystery trong file.")
+            else:
+                total_mystery = int(mystery_df["Hoàn thành"].sum())
+                c1, c2 = st.columns(2)
+                c1.metric("Đã nhận diện", total_mystery)
+                c2.metric("Target", MYSTERY_TARGET)
+                st.progress(min(total_mystery / MYSTERY_TARGET, 1.0))
+                st.dataframe(mystery_df, use_container_width=True, hide_index=True)
 
     except Exception as e:
         st.error(f"Lỗi đọc dữ liệu: {e}")
 else:
-    st.info("👋 Chưa tìm thấy dữ liệu báo cáo cho màn hình này. Vui lòng nạp file Excel ở thanh Sidebar bên trái!")
+    st.info("👋 Chưa tìm thấy dữ liệu báo cáo cho màn hình này. Vui lòng nạp file Excel ở thanh 
