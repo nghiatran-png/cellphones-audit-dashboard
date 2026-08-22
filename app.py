@@ -1,78 +1,21 @@
-import streamlit as st
-import pandas as pd
-import unicodedata
-import os
 import io
 import re
+import unicodedata
+import pandas as pd
 import plotly.express as px
+import streamlit as st
 
-# 1. Cấu hình giao diện Streamlit Enterprise
 st.set_page_config(
-    page_title="CellphoneS Audit Platform V3.2 - Lần 1 & Lần 2", 
-    page_icon="📱", 
-    layout="wide"
+    page_title="CellphoneS Audit Platform V3.3",
+    page_icon="📱",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# File lưu trữ dữ liệu riêng cho 2 đợt
-APP_VERSION = "3.2.0"
-PASS_SCORE = 50
-MYSTERY_TARGET = 153
+APP_VERSION="3.3.0"
+PASS_SCORE=50
+MYSTERY_TARGET=153
 
-for _k in ["l1_bytes", "l1_name", "l2_bytes", "l2_name"]:
-    if _k not in st.session_state:
-        st.session_state[_k] = None
-
-# Custom CSS thương hiệu CellphoneS
-st.markdown("""
-    <style>
-    .stApp { background-color: #f8f9fa; }
-    .cps-header {
-        background: linear-gradient(135deg, #d70018 0%, #8b0000 100%);
-        color: white; padding: 20px 25px; border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(215, 0, 24, 0.2); margin-bottom: 20px;
-    }
-    .cps-title {font-size: 26px; font-weight: 800; margin: 0; letter-spacing: 0.5px;}
-    .cps-subtitle {font-size: 13px; color: #ffcccc; margin-top: 5px;}
-    div[data-testid="stMetric"] {
-        background-color: #ffffff; border-left: 5px solid #d70018;
-        border-radius: 10px; padding: 15px 18px; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
-    }
-    .stTabs [data-baseweb="tab-list"] {gap: 8px; background-color: #ffffff; padding: 8px; border-radius: 10px;}
-    .stTabs [aria-selected="true"] {background-color: #d70018 !important; color: white !important; font-weight: bold; border-radius: 8px;}
-    .report-title {background-color: #d70018; color: white; padding: 12px; font-weight: bold; text-align: center; font-size: 17px; border-radius: 8px 8px 0 0;}
-    .report-sub {background-color: #f8d7da; color: #721c24; padding: 6px; font-style: italic; text-align: center; font-size: 13px; margin-bottom: 20px;}
-    div.stButton > button {
-        background-color: #d70018 !important; color: white !important; 
-        font-weight: bold !important; border-radius: 8px !important; 
-        padding: 12px 24px !important; font-size: 15px !important; border: none !important; width: 100%;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# Hàm chuẩn hóa chuỗi / khử dấu Tiếng Việt
-def norm(text):
-    if pd.isna(text):
-        return ""
-    text = str(text).replace("\u200b", "").replace("\ufeff", "").strip()
-    text = unicodedata.normalize("NFD", text)
-    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
-    return re.sub(r"[^a-z0-9]", "", text.lower())
-
-def norm_code(value):
-    return "" if pd.isna(value) else str(value).strip().upper()
-
-def find_col(columns, aliases):
-    aliases_n = [norm(a) for a in aliases]
-    for c in columns:
-        if norm(c) in aliases_n:
-            return c
-    for c in columns:
-        nc = norm(c)
-        if any(a and a in nc for a in aliases_n):
-            return c
-    return None
-
-# Master 35 Nhân sự cố định Lần 1
 TARGET_35_NV_MASTER = [
     {"Tên": "NGUYỄN CÔNG TUẤN", "Mã cửa hàng": "CPS-HNO-CGI-126HTM", "Leader": "Vũ Hoài Nam"},
     {"Tên": "NGUYỄN HỮU THÀNH", "Mã cửa hàng": "CPS-HNO-CGI-160NKT", "Leader": "Vũ Hoài Nam"},
@@ -110,8 +53,6 @@ TARGET_35_NV_MASTER = [
     {"Tên": "NGUYỄN TRUNG KIÊN", "Mã cửa hàng": "CPS-HCM-Q01-157NTMK", "Leader": "Trần Trung Nghĩa"},
     {"Tên": "NGUYỄN HỮU MINH QUÂN", "Mã cửa hàng": "CPS-HCM-TDU-632AKVC", "Leader": "Trần Trung Nghĩa"}
 ]
-
-# Master 94 Nhân sự Không đạt Esim L1 (Kiểm tra Lần 2)
 TARGET_94_ESIM_L1 = [
     {"STT": 1, "MSNV": "S16542", "Tên": "HOÀNG VĂN HUY", "Shop": "CPS-HNO-DPH-89TS", "Miền": "Miền Bắc", "Vị trí": "Tư vấn bán hàng CPS", "Leader": "Vũ Hoài Nam"},
     {"STT": 2, "MSNV": "S14019", "Tên": "NGUYỄN QUANG AN", "Shop": "CPS-HNO-HDU-679VX", "Miền": "Miền Bắc", "Vị trí": "Tư vấn bán hàng CPS", "Leader": "Vũ Hoài Nam"},
@@ -209,498 +150,373 @@ TARGET_94_ESIM_L1 = [
     {"STT": 94, "MSNV": "S03992", "Tên": "NGUYỄN MẠNH TOÀN", "Shop": "CPS-HNO-BTL-244PVD", "Miền": "Miền Bắc", "Vị trí": "Kho AIO", "Leader": "Vũ Hoài Nam"}
 ]
 
-
-# ============================================================
-# FAST LOOKUP INDEXES — tránh loop 35/94 cho từng dòng raw
-# ============================================================
-MASTER35_BY_NAME = {norm(x["Tên"]): x for x in TARGET_35_NV_MASTER}
-MASTER94_BY_MSNV = {norm(x["MSNV"]): x for x in TARGET_94_ESIM_L1}
-MASTER94_BY_NAME = {norm(x["Tên"]): x for x in TARGET_94_ESIM_L1}
-
-
-# Styling Kết quả
-def style_evaluation(val):
-    v = str(val)
-    if "ĐẠT" in v and "KHÔNG" not in v and "CHƯA" not in v:
-        return "background-color: #d4edda; color: #155724; font-weight: bold;"
-    elif "CHƯA ĐẠT" in v or "KHÔNG ĐẠT" in v or "TRẢ LẦN 2" in v:
-        return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
-    elif "CHƯA TRẢ BÀI" in v or "CHƯA CHẤM" in v:
-        return "background-color: #e2e3e5; color: #383d41;"
-    return ""
-
-def style_note_35(val):
-    v = str(val)
-    if "Đã trả bài (ĐẠT)" in v:
-        return "background-color: #d4edda; color: #155724; font-weight: bold;"
-    elif "Đã trả bài (Không đạt)" in v:
-        return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
-    elif "Bắt buộc phỏng vấn lần 2" in v or "Bắt buộc trả lần 2" in v:
-        return "background-color: #fff3cd; color: #856404; font-weight: bold;"
-    return ""
-
-@st.cache_data(show_spinner=False, max_entries=4)
-def load_all_sheets(file_bytes):
-    bio = io.BytesIO(file_bytes)
-    xls = pd.ExcelFile(bio)
-    return {name: pd.read_excel(io.BytesIO(file_bytes), sheet_name=name) for name in xls.sheet_names}
-
-def save_upload(uploaded, prefix):
-    if uploaded is None:
-        return
-    st.session_state[f"{prefix}_bytes"] = uploaded.getvalue()
-    st.session_state[f"{prefix}_name"] = uploaded.name
-
-def get_round_data(prefix):
-    data = st.session_state.get(f"{prefix}_bytes")
-    name = st.session_state.get(f"{prefix}_name")
-    return (load_all_sheets(data), name) if data else (None, None)
-
-def derive_store_series(df):
-    c = find_col(df.columns, ["Mã cửa hàng", "Store Code", "Store ID", "Shop", "Mã CH"])
-    if c:
-        return df[c].apply(norm_code)
-    c_plan = find_col(df.columns, ["Tên Plan", "Plan Name", "Plan"])
-    if c_plan:
-        return df[c_plan].fillna("").astype(str).str.extract(r"((?:CPS|DTV)-[A-Za-z0-9/.-]+)", expand=False).fillna("").str.upper()
-    return pd.Series([""] * len(df), index=df.index)
-
-def compute_progress_metrics(sheets):
-    m = {"trade_cps": 0, "trade_dtv": 0, "plus_stores": 0, "mystery_plans": 0, "qc_done": 0, "qc_pending": 0, "rework": 0}
-    for sname, df in sheets.items():
-        if df.empty:
-            continue
-        sn = norm(sname)
-        stores = derive_store_series(df)
-        c_qc = find_col(df.columns, ["QC Status", "Trạng thái QC", "Kết quả QC"])
-        if c_qc:
-            q = df[c_qc].fillna("").astype(str).str.lower()
-            m["qc_done"] += int(q.isin(["done", "pass", "passed", "approved", "ok"]).sum())
-            m["qc_pending"] += int(q.str.contains("pending|chờ|cho duyet", regex=True, na=False).sum())
-            m["rework"] += int(q.str.contains("rework|reject|refuse|fail|bổ sung|bo sung|ycbs", regex=True, na=False).sum())
-        if "trade" in sn and "plus" not in sn:
-            valid = stores[stores.ne("")]
-            m["trade_cps"] = max(m["trade_cps"], int(valid[valid.str.startswith("CPS-")].nunique()))
-            m["trade_dtv"] = max(m["trade_dtv"], int(valid[valid.str.startswith("DTV-")].nunique()))
-        if "plus" in sn:
-            m["plus_stores"] = max(m["plus_stores"], int(stores[stores.ne("")].nunique()))
-        if "mystery" in sn:
-            c_plan = find_col(df.columns, ["Tên Plan", "Plan Name", "Plan"])
-            if c_plan:
-                m["mystery_plans"] = max(m["mystery_plans"], int(df[c_plan].dropna().astype(str).str.strip().replace("", pd.NA).dropna().nunique()))
-    return m
-
-def build_leader_summary(sheets, tested_dict):
-    rows = []
-    for leader in ["Giang Văn Huy", "Ngô Tuấn Cảnh", "Trần Trung Nghĩa", "Vũ Hoài Nam", "Đỗ Quang Tiến"]:
-        stores, done, pending, rework = set(), 0, 0, 0
-        for _, df in sheets.items():
-            c_lead = find_col(df.columns, ["Leader", "Lead", "Leader Phụ Trách", "Quản lý"])
-            if not c_lead:
-                continue
-            mask = df[c_lead].fillna("").astype(str).str.strip().eq(leader)
-            if not mask.any():
-                continue
-            ss = derive_store_series(df.loc[mask])
-            stores.update(x for x in ss if x)
-            c_qc = find_col(df.columns, ["QC Status", "Trạng thái QC", "Kết quả QC"])
-            if c_qc:
-                q = df.loc[mask, c_qc].fillna("").astype(str).str.lower()
-                done += int(q.isin(["done", "pass", "passed", "approved", "ok"]).sum())
-                pending += int(q.str.contains("pending|chờ|cho duyet", regex=True, na=False).sum())
-                rework += int(q.str.contains("rework|reject|refuse|fail|bổ sung|bo sung|ycbs", regex=True, na=False).sum())
-        tt1 = sum(1 for v in tested_dict.values() if v.get("Leader") == leader)
-        rows.append({"Leader": leader, "Shop nhận diện": len(stores), "QC Done rows": done, "QC Pending rows": pending, "Rework rows": rework, "35 NV đã trả bài": tt1})
-    return pd.DataFrame(rows)
-
-def build_mystery_summary(sheets):
-    frames = []
-    for sname, df in sheets.items():
-        if "mystery" not in norm(sname) or df.empty:
-            continue
-        c_plan = find_col(df.columns, ["Tên Plan", "Plan Name", "Plan"])
-        c_lead = find_col(df.columns, ["Leader", "Lead", "Leader Phụ Trách"])
-        if not c_plan:
-            continue
-        tmp = pd.DataFrame({"Plan": df[c_plan].fillna("").astype(str).str.strip(), "Leader": df[c_lead].fillna("Chưa gán").astype(str).str.strip() if c_lead else "Chưa gán"})
-        tmp = tmp[tmp["Plan"].ne("")].drop_duplicates(["Plan"])
-        frames.append(tmp)
-    if not frames:
-        return pd.DataFrame(columns=["Leader", "Hoàn thành", "Tỷ trọng"])
-    x = pd.concat(frames, ignore_index=True).drop_duplicates(["Plan"])
-    out = x.groupby("Leader", dropna=False).size().reset_index(name="Hoàn thành")
-    total = int(out["Hoàn thành"].sum())
-    out["Tỷ trọng"] = out["Hoàn thành"].apply(lambda v: f"{v/total:.1%}" if total else "0%")
-    return out.sort_values("Hoàn thành", ascending=False)
-
-# --- SIDEBAR QUẢN TRỊ MÀN HÌNH ĐỘC LẬP LẦN 1 & LẦN 2 ---
-with st.sidebar:
-    st.markdown("### 🖥️ CHỌN MÀN HÌNH ĐIỀU HÀNH")
-    
-    view_mode = st.radio(
-        "Chế độ hiển thị Giao diện:",
-        [
-            "📌 MÀN HÌNH LẦN 1", 
-            "📌 MÀN HÌNH LẦN 2", 
-            "📊 TỔNG HỢP SO SÁNH 2 LẦN (CEO VIEW)"
-        ],
-        index=0
-    )
-    
-    st.write("---")
-    st.markdown("### ⚙️ QUẢN TRỊ NẠP FILE MỚI")
-    
-    up_l1 = st.file_uploader("Nạp Excel Raw Data (LẦN 1):", type=["xlsx", "xls"], key="up1")
-    if up_l1 is not None:
-        save_upload(up_l1, "l1")
-        st.success(f"✅ L1 đã refresh: {up_l1.name}")
-
-    up_l2 = st.file_uploader("Nạp Excel Raw Data (LẦN 2):", type=["xlsx", "xls"], key="up2")
-    if up_l2 is not None:
-        save_upload(up_l2, "l2")
-        st.success(f"✅ L2 đã refresh: {up_l2.name}")
-
-    st.write("---")
-    st.markdown("### 🔍 BỘ LỌC CHI TIẾT")
-    selected_region = st.selectbox("🌐 Chọn Miền:", ["Tất cả", "Miền Bắc", "Miền Nam"])
-    selected_leader = st.selectbox("👤 Chọn Leader Phụ Trách:", ["Tất cả", "Giang Văn Huy", "Ngô Tuấn Cảnh", "Trần Trung Nghĩa", "Vũ Hoài Nam", "Đỗ Quang Tiến"])
-
-# HEADER ENTERPRISE THEO MÀN HÌNH ĐANG CHỌN
-header_sub = "Đang hiển thị Màn hình Lần 1" if "LẦN 1" in view_mode else ("Đang hiển thị Màn hình Lần 2" if "LẦN 2" in view_mode else "Màn hình So Sánh 2 Lần dành cho CEO")
-st.markdown(f"""
-    <div class="cps-header">
-        <div class="cps-title">📱 CELLPHONES ENTERPRISE AUDIT — {view_mode}</div>
-        <div class="cps-subtitle">{header_sub} (FAST • v3.2.0)</div>
-    </div>
+# ---------------- UI ----------------
+st.markdown("""
+<style>
+:root{--brand:#d70018;--brand2:#8f0010;--line:#e4e7ec;--ink:#101828;--muted:#667085;}
+.stApp{background:#f6f7f9}
+.block-container{max-width:1680px;padding-top:1rem;padding-bottom:3rem}
+.hero{display:flex;justify-content:space-between;align-items:center;padding:20px 24px;border-radius:16px;color:white;
+background:linear-gradient(135deg,var(--brand),var(--brand2));box-shadow:0 12px 28px rgba(215,0,24,.16);margin-bottom:16px}
+.hero-title{font-size:28px;font-weight:900} .hero-sub{font-size:13px;opacity:.86}
+.hero-pill{padding:9px 13px;border-radius:999px;background:rgba(255,255,255,.14);font-weight:800}
+div[data-testid="stMetric"]{background:white;border:1px solid var(--line);border-radius:14px;padding:14px}
+div[data-testid="stMetricValue"]{font-weight:900;color:var(--ink)}
+.stTabs [data-baseweb="tab-list"]{background:white;border:1px solid var(--line);padding:6px;border-radius:12px;gap:4px}
+.stTabs [aria-selected="true"]{background:var(--brand)!important;color:white!important;border-radius:8px;font-weight:800}
+</style>
 """, unsafe_allow_html=True)
 
-target_key = "l1" if "LẦN 1" in view_mode else ("l2" if "LẦN 2" in view_mode else None)
-target_sheets, target_file_name = get_round_data(target_key) if target_key else (None, None)
+# ---------------- Normalize ----------------
+def norm(v):
+    if pd.isna(v): return ""
+    s=str(v).replace("\u200b","").replace("\ufeff","").strip()
+    s=unicodedata.normalize("NFD",s)
+    s="".join(c for c in s if unicodedata.category(c)!="Mn")
+    return re.sub(r"\s+"," ",s.lower()).strip()
 
-if view_mode == "📊 TỔNG HỢP SO SÁNH 2 LẦN (CEO VIEW)":
-    sheets_l1, name_l1 = get_round_data("l1")
-    sheets_l2, name_l2 = get_round_data("l2")
-    has_l1 = sheets_l1 is not None
-    has_l2 = sheets_l2 is not None
-    col1, col2 = st.columns(2)
-    with col1:
-        st.info("📌 **LẦN 1:** " + (f"🟢 {name_l1}" if has_l1 else "🔴 Chưa nạp file"))
-    with col2:
-        st.info("📌 **LẦN 2:** " + (f"🟢 {name_l2}" if has_l2 else "🔴 Chưa nạp file"))
-    if has_l1 or has_l2:
-        p1 = compute_progress_metrics(sheets_l1) if has_l1 else {}
-        p2 = compute_progress_metrics(sheets_l2) if has_l2 else {}
-        rows = []
-        labels = [("trade_cps","Trade Audit CPS"),("trade_dtv","Trade Audit DTV"),("plus_stores","Audit Plus Store"),("mystery_plans","Mystery unique Plan"),("qc_done","QC Done rows"),("rework","Rework/Reject rows")]
-        for key, label in labels:
-            v1, v2 = p1.get(key,0), p2.get(key,0)
-            rows.append({"Hạng mục":label,"Lần 1":v1,"Lần 2":v2,"Chênh lệch L2-L1":v2-v1})
-        ceo_df = pd.DataFrame(rows)
-        st.dataframe(ceo_df, use_container_width=True, hide_index=True)
-        st.plotly_chart(px.bar(ceo_df, x="Hạng mục", y=["Lần 1","Lần 2"], barmode="group", title="So sánh L1 vs L2 từ dữ liệu thực"), use_container_width=True)
+def norm_code(v):
+    return "" if pd.isna(v) else str(v).strip().upper()
+
+def classify_qc(v):
+    s=norm(v)
+    if not s or s in {"nan","none"}: return "NONE"
+    if any(k in s for k in ["rework","ycbs","yeu cau bo sung","bo sung","thieu"]): return "REWORK"
+    if any(k in s for k in ["reject","refused","refuse","fail","failed","khong dat","invalid"]): return "REJECT"
+    if any(k in s for k in ["pending_review","pending review"]): return "PENDING_REVIEW"
+    if any(k in s for k in ["pending","cho duyet","waiting"]): return "PENDING"
+    if s in {"done","pass","passed","approved","approve","ok","dat"}: return "DONE"
+    return "UNKNOWN"
+
+def eval_score(v):
+    try: x=float(v)
+    except: return "CHƯA CÓ ĐIỂM"
+    return "ĐẠT" if x>=PASS_SCORE else "KHÔNG ĐẠT"
+
+# ---------------- Session/file loading ----------------
+for k in ["l1_bytes","l1_name","l2_bytes","l2_name"]:
+    if k not in st.session_state: st.session_state[k]=None
+
+USECOLS={
+    "Mystery Audit":["Tên Plan","Chấm","Hệ thống","Mã cửa hàng","Tên Leader","Tên nhân viên thực hiện","Ngày update","Status Plan","QC Status","Ngày thực hiện","Hạng mục"],
+    "Trade Audit":["Tên Plan","Chấm","Hệ thống","Mã cửa hàng","Tên Leader","Tên nhân viên thực hiện","Ngày update","Status Plan","QC Status","Ngày thực hiện","Hạng mục","Result","Category","Sub-category","KPI","QC note"],
+    "Trade Audit Plus":["Tên Plan","Chấm","Hệ thống","Mã cửa hàng","Tên Leader","Tên nhân viên thực hiện","Ngày update","Status Plan","QC Status","Ngày thực hiện","MSNV","Mã câu hỏi","Câu hỏi chính","Câu trả lời","Trả lời ngay","Trả lời Phụ","Trả lời có tài liệu","Có xem tài liệu","Thang điểm","Thực đạt","QC note"],
+}
+
+@st.cache_data(show_spinner=False,max_entries=4)
+def load_report(file_bytes):
+    xls=pd.ExcelFile(io.BytesIO(file_bytes))
+    out={}
+    for s in xls.sheet_names:
+        if s not in USECOLS: 
+            continue
+        header=pd.read_excel(io.BytesIO(file_bytes),sheet_name=s,nrows=0).columns.tolist()
+        cols=[c for c in USECOLS[s] if c in header]
+        out[s]=pd.read_excel(io.BytesIO(file_bytes),sheet_name=s,usecols=cols)
+    return out
+
+def save_upload(uploaded,prefix):
+    if uploaded:
+        st.session_state[f"{prefix}_bytes"]=uploaded.getvalue()
+        st.session_state[f"{prefix}_name"]=uploaded.name
+
+def get_round(prefix):
+    b=st.session_state.get(f"{prefix}_bytes")
+    return (load_report(b),st.session_state.get(f"{prefix}_name")) if b else (None,None)
+
+# ---------------- Round filtering ----------------
+def filter_round(df,label):
+    if df is None or df.empty or "Chấm" not in df.columns: return df
+    wanted=norm(label)
+    x=df[df["Chấm"].apply(norm).eq(wanted)]
+    return x.copy()
+
+def plan_level(df):
+    if df is None or df.empty or "Tên Plan" not in df.columns:
+        return pd.DataFrame()
+    x=df.copy()
+    if "Ngày update" in x.columns:
+        x["_dt"]=pd.to_datetime(x["Ngày update"],errors="coerce",dayfirst=True)
+        x=x.sort_values("_dt")
+    return x.drop_duplicates("Tên Plan",keep="last").copy()
+
+# ---------------- Plus interview engine ----------------
+FLAG_COLS=["Trả lời ngay","Trả lời Phụ","Trả lời có tài liệu","Có xem tài liệu"]
+
+def boolish(v):
+    if pd.isna(v): return False
+    if isinstance(v,bool): return v
+    if isinstance(v,(int,float)): return bool(v)
+    return norm(v) in {"true","1","yes","y","x","co","ok"}
+
+def plus_interviews(plus_df):
+    if plus_df is None or plus_df.empty: return pd.DataFrame()
+    x=plus_df.copy()
+    if "Mã câu hỏi" not in x.columns or "Tên Plan" not in x.columns: return pd.DataFrame()
+
+    # score per plan
+    x["_answered"]=False
+    for c in FLAG_COLS:
+        if c in x.columns:
+            x["_answered"]=x["_answered"] | x[c].apply(boolish)
+
+    if "Thực đạt" in x.columns and pd.to_numeric(x["Thực đạt"],errors="coerce").notna().any():
+        score=x.groupby("Tên Plan")["Thực đạt"].apply(lambda s: pd.to_numeric(s,errors="coerce").sum(min_count=1))
+    elif "Thang điểm" in x.columns:
+        pts=pd.to_numeric(x["Thang điểm"],errors="coerce").fillna(0)
+        x["_pts"]=pts.where(x["_answered"],0)
+        score=x.groupby("Tên Plan")["_pts"].sum()
     else:
-        st.warning("Chưa có dữ liệu L1/L2 để so sánh.")
+        score=pd.Series(dtype=float)
 
-elif target_sheets is not None:
+    tt1=x[x["Mã câu hỏi"].astype(str).str.upper().eq("TT1")].copy()
+    if tt1.empty: return pd.DataFrame()
 
-    try:
-        sheets_data = target_sheets
+    out=pd.DataFrame({
+        "plan_name":tt1["Tên Plan"].astype(str).str.strip(),
+        "store_code":tt1["Mã cửa hàng"].apply(norm_code) if "Mã cửa hàng" in tt1.columns else "",
+        "leader":tt1["Tên Leader"].fillna("").astype(str).str.strip() if "Tên Leader" in tt1.columns else "",
+        "field_name":tt1["Tên nhân viên thực hiện"].fillna("").astype(str).str.strip() if "Tên nhân viên thực hiện" in tt1.columns else "",
+        "employee_id":tt1["MSNV"].fillna("").astype(str).str.strip() if "MSNV" in tt1.columns else "",
+        "employee_name":tt1["Câu trả lời"].fillna("").astype(str).str.strip() if "Câu trả lời" in tt1.columns else "",
+        "qc_status":tt1["QC Status"].apply(classify_qc) if "QC Status" in tt1.columns else "NONE",
+        "status_plan":tt1["Status Plan"].fillna("").astype(str).str.strip() if "Status Plan" in tt1.columns else "",
+        "updated_at":pd.to_datetime(tt1["Ngày update"],errors="coerce",dayfirst=True) if "Ngày update" in tt1.columns else pd.NaT,
+    })
+    out["score"]=out["plan_name"].map(score)
+    out["evaluation"]=out["score"].apply(eval_score)
+    out=out[out["employee_name"].apply(norm).ne("")]
+    return out.drop_duplicates("plan_name",keep="last")
 
-        search_query = st.text_input("🔎 TRA CỨU NHANH (Nhập Mã NV / Tên Nhân Sự / Mã Cửa Hàng):", "").strip()
+# ---------------- 35 / 94 matching ----------------
+def match35(interviews):
+    rows=[]
+    x=interviews.copy()
+    if not x.empty:
+        x["_name"]=x["employee_name"].apply(norm)
+        x["_store"]=x["store_code"].apply(norm_code)
+    for m in TARGET_35_NV_MASTER:
+        cand=pd.DataFrame()
+        if not x.empty:
+            cand=x[(x["_name"]==norm(m["Tên"])) & (x["_store"]==norm_code(m["Mã cửa hàng"]))]
+            if cand.empty and "..." in m["Mã cửa hàng"]:
+                cand=x[x["_name"]==norm(m["Tên"])]
+        if cand.empty:
+            rows.append({"Nhân sự":m["Tên"],"Mã cửa hàng":m["Mã cửa hàng"],"Leader":m["Leader"],
+                         "Điểm trả bài":pd.NA,"Đánh giá":"CHƯA TRẢ BÀI","QC Status":"NONE","Field":"","Ngày thực hiện":pd.NaT})
+        else:
+            r=cand.sort_values("updated_at").iloc[-1]
+            rows.append({"Nhân sự":m["Tên"],"Mã cửa hàng":m["Mã cửa hàng"],"Leader":m["Leader"],
+                         "Điểm trả bài":r["score"],"Đánh giá":r["evaluation"],"QC Status":r["qc_status"],
+                         "Field":r["field_name"],"Ngày thực hiện":r["updated_at"]})
+    return pd.DataFrame(rows)
 
-        # 1. ĐỐI SOÁT 35 NV MASTER — FAST O(rows)
-        tested_dict = {}
-        for sheet_name, df in sheets_data.items():
-            if df.empty:
-                continue
-            c_name = find_col(df.columns, ['Nhân sự', 'Tên nhân viên', 'Họ và tên', 'Tên NV'])
-            c_score = find_col(df.columns, ['Điểm trả bài', 'Score', 'Thực đạt'])
-            c_status = find_col(df.columns, ['QC Status', 'Trạng thái', 'Status'])
-            c_date = find_col(df.columns, ['Ngày', 'Date', 'Thời gian'])
-            if not c_name:
-                continue
+def match94(interviews):
+    rows=[]
+    x=interviews.copy()
+    if not x.empty:
+        x["_id"]=x["employee_id"].apply(lambda v:norm(str(v).lstrip("0")))
+        x["_name"]=x["employee_name"].apply(norm)
+        x["_store"]=x["store_code"].apply(norm_code)
+    for m in TARGET_94_ESIM_L1:
+        cand=pd.DataFrame()
+        if not x.empty:
+            target_id=norm(str(m["MSNV"]).lstrip("0"))
+            cand=x[x["_id"]==target_id]
+            if cand.empty:
+                cand=x[(x["_name"]==norm(m["Tên"])) & (x["_store"]==norm_code(m["Shop"]))]
+        if cand.empty:
+            rows.append({"STT":m["STT"],"MSNV":m["MSNV"],"Họ và Tên":m["Tên"],"Shop":m["Shop"],"Miền":m["Miền"],
+                         "Leader":m["Leader"],"Field":"","Điểm L2":pd.NA,"Kết quả L2":"BẮT BUỘC TRẢ LẦN 2"})
+        else:
+            r=cand.sort_values("updated_at").iloc[-1]
+            rows.append({"STT":m["STT"],"MSNV":m["MSNV"],"Họ và Tên":m["Tên"],"Shop":m["Shop"],"Miền":m["Miền"],
+                         "Leader":m["Leader"],"Field":r["field_name"],"Điểm L2":r["score"],"Kết quả L2":r["evaluation"]})
+    return pd.DataFrame(rows)
 
-            cols = [c_name] + [c for c in [c_score, c_status, c_date] if c and c != c_name]
-            tmp = df[cols].copy()
-            tmp["_name_key"] = tmp[c_name].apply(norm)
-            tmp = tmp[tmp["_name_key"].isin(MASTER35_BY_NAME)]
-            if tmp.empty:
-                continue
+# ---------------- Plan-level metrics ----------------
+def metrics(sheets,round_label):
+    trade=filter_round(sheets.get("Trade Audit",pd.DataFrame()),round_label)
+    plus=filter_round(sheets.get("Trade Audit Plus",pd.DataFrame()),round_label)
+    mystery=filter_round(sheets.get("Mystery Audit",pd.DataFrame()),round_label)
 
-            for _, r in tmp.iterrows():
-                item = MASTER35_BY_NAME.get(r["_name_key"])
-                if not item:
-                    continue
-                if selected_leader != "Tất cả" and item["Leader"] != selected_leader:
-                    continue
+    tplan=plan_level(trade); pplan=plan_level(plus); mplan=plan_level(mystery)
+    interviews=plus_interviews(plus)
 
-                raw_score = r[c_score] if c_score and pd.notna(r[c_score]) else None
-                try:
-                    score = float(raw_score) if raw_score is not None else None
-                except (TypeError, ValueError):
-                    score = None
+    def qc_counts(pl):
+        if pl.empty or "QC Status" not in pl.columns: return {"DONE":0,"PENDING":0,"PENDING_REVIEW":0,"REJECT":0,"REWORK":0}
+        q=pl["QC Status"].apply(classify_qc)
+        return {k:int((q==k).sum()) for k in ["DONE","PENDING","PENDING_REVIEW","REJECT","REWORK"]}
 
-                qc_raw = str(r[c_status]).strip() if c_status and pd.notna(r[c_status]) else ""
-                date_raw = str(r[c_date]).strip() if c_date and pd.notna(r[c_date]) else "None"
+    def field_done(pl):
+        if pl.empty or "Status Plan" not in pl.columns:return 0
+        return int(pl["Status Plan"].apply(norm).eq("done").sum())
 
-                evaluation = "ĐẠT" if score is not None and score >= PASS_SCORE else ("KHÔNG ĐẠT" if score is not None else "CHƯA CÓ ĐIỂM")
-                note = "Đã hoàn thành" if evaluation == "ĐẠT" else ("Bắt buộc trả/phỏng vấn lại" if evaluation == "KHÔNG ĐẠT" else "Cần xác minh điểm - không suy từ QC Status")
+    system=tplan["Hệ thống"].fillna("").astype(str).str.upper() if not tplan.empty and "Hệ thống" in tplan.columns else pd.Series(dtype=str)
+    cps_stores=tplan.loc[system.eq("CPS"),"Mã cửa hàng"].nunique() if len(system) else 0
+    dtv_stores=tplan.loc[system.eq("DTV"),"Mã cửa hàng"].nunique() if len(system) else 0
 
-                tested_dict[item["Tên"]] = {
-                    "Leader": item["Leader"],
-                    "Điểm trả bài": round(score, 2) if score is not None else "N/A",
-                    "Đánh giá": evaluation,
-                    "Ghi chú PV2": note,
-                    "QC Status": qc_raw if qc_raw else "None",
-                    "Ngày thực hiện": date_raw if date_raw != "nan" else "None"
-                }
+    return {
+        "trade_raw":trade,"plus_raw":plus,"mystery_raw":mystery,
+        "trade_plan":tplan,"plus_plan":pplan,"mystery_plan":mplan,"interviews":interviews,
+        "trade_cps_stores":int(cps_stores),"trade_dtv_stores":int(dtv_stores),
+        "trade_plans":len(tplan),"plus_plans":len(pplan),"mystery_plans":len(mplan),
+        "plus_stores":int(pplan["Mã cửa hàng"].nunique()) if not pplan.empty else 0,
+        "trade_field_done":field_done(tplan),"plus_field_done":field_done(pplan),"mystery_field_done":field_done(mplan),
+        "trade_qc":qc_counts(tplan),"plus_qc":qc_counts(pplan),"mystery_qc":qc_counts(mplan),
+    }
 
-        # 2. ĐỐI SOÁT 94 NV ESIM L1 — FAST O(rows)
-        esim_l2_dict = {}
-        for sheet_name, df in sheets_data.items():
-            if df.empty:
-                continue
-            c_msnv = find_col(df.columns, ['MSNV', 'Mã NV', 'Mã nhân sự', 'scode'])
-            c_name = find_col(df.columns, ['Nhân sự', 'Tên', 'Họ và tên', 'Nhân viên'])
-            c_l2 = find_col(df.columns, ['Lần chấm 02', 'Lần 02', 'Chấm 02', 'Lần 2', 'Điểm lần 2', 'QC lần 2'])
-            c_merch = find_col(df.columns, ['Merchandiser', 'Field', 'NV đi field'])
-            if not c_l2:
-                continue
+def leader_summary(m):
+    frames=[]
+    for label,key in [("Trade","trade_plan"),("Plus","plus_plan"),("Mystery","mystery_plan")]:
+        x=m[key]
+        if x.empty: continue
+        y=x.copy()
+        y["Leader"]=y["Tên Leader"].fillna("Chưa gán").astype(str).str.strip() if "Tên Leader" in y.columns else "Chưa gán"
+        y["QC"]=y["QC Status"].apply(classify_qc) if "QC Status" in y.columns else "NONE"
+        y["Nghiệp vụ"]=label
+        frames.append(y[["Tên Plan","Mã cửa hàng","Leader","QC","Nghiệp vụ"]])
+    if not frames:return pd.DataFrame()
+    z=pd.concat(frames,ignore_index=True).drop_duplicates(["Tên Plan","Nghiệp vụ"])
+    return z.groupby("Leader").agg(
+        Shop=("Mã cửa hàng","nunique"),
+        Plan=("Tên Plan","nunique"),
+        QC_Done=("QC",lambda s:int((s=="DONE").sum())),
+        QC_Pending=("QC",lambda s:int(s.isin(["PENDING","PENDING_REVIEW"]).sum())),
+        QC_Reject_Rework=("QC",lambda s:int(s.isin(["REJECT","REWORK"]).sum()))
+    ).reset_index()
 
-            cols = [c_l2] + [c for c in [c_msnv, c_name, c_merch] if c and c != c_l2]
-            tmp = df[cols].copy()
-            tmp["_id_key"] = tmp[c_msnv].apply(norm) if c_msnv else ""
-            tmp["_name_key"] = tmp[c_name].apply(norm) if c_name else ""
-            tmp = tmp[tmp["_id_key"].isin(MASTER94_BY_MSNV) | tmp["_name_key"].isin(MASTER94_BY_NAME)]
-            if tmp.empty:
-                continue
+# ---------------- Sidebar ----------------
+with st.sidebar:
+    st.markdown("### 🖥️ MÀN HÌNH ĐIỀU HÀNH")
+    view=st.radio("Chế độ",["📌 LẦN 1","📌 LẦN 2","📊 CEO VIEW"],index=1)
+    st.divider()
+    u1=st.file_uploader("Raw Data Lần 1",type=["xlsx","xls"],key="l1")
+    if u1: save_upload(u1,"l1"); st.success("Đã nạp L1")
+    u2=st.file_uploader("Raw Data Lần 2",type=["xlsx","xls"],key="l2")
+    if u2: save_upload(u2,"l2"); st.success("Đã nạp L2")
+    st.divider()
+    leaders=sorted({x["Leader"] for x in TARGET_35_NV_MASTER}|{x["Leader"] for x in TARGET_94_ESIM_L1})
+    selected_leader=st.selectbox("Leader",["Tất cả"]+leaders)
+    selected_region=st.selectbox("Miền",["Tất cả","Miền Bắc","Miền Nam"])
+    search=st.text_input("Tìm NV / MSNV / Shop","")
 
-            for _, r in tmp.iterrows():
-                item94 = MASTER94_BY_MSNV.get(r["_id_key"]) or MASTER94_BY_NAME.get(r["_name_key"])
-                if item94 is None:
-                    continue
+st.markdown(f"""
+<div class="hero"><div><div class="hero-title">📱 CELLPHONES ENTERPRISE AUDIT — {view}</div>
+<div class="hero-sub">Plan-level engine • Trade • Plus • Mystery • Interview • QC</div></div>
+<div class="hero-pill">v{APP_VERSION}</div></div>
+""",unsafe_allow_html=True)
 
-                raw_l2 = str(r[c_l2]).strip() if pd.notna(r[c_l2]) else ""
-                field_raw = str(r[c_merch]).strip() if c_merch and pd.notna(r[c_merch]) else ""
-                if not raw_l2 and not field_raw:
-                    continue
+def render_round(sheets,fname,label):
+    m=metrics(sheets,label)
+    if not any([m["trade_plans"],m["plus_plans"],m["mystery_plans"]]):
+        st.error(f"File {fname} không có dữ liệu '{label}' trong cột Chấm. Không dùng dữ liệu vòng khác để giả lập {label}.")
+        st.stop()
 
-                try:
-                    score_f = float(raw_l2)
-                    eval_l2 = "ĐẠT" if score_f >= PASS_SCORE else "CHƯA ĐẠT"
-                except (TypeError, ValueError):
-                    s = norm(raw_l2)
-                    if s in {"dat", "pass", "done", "ok", "1"}:
-                        eval_l2 = "ĐẠT"
-                    elif any(k in s for k in ["khong", "chua", "fail", "reject", "0"]):
-                        eval_l2 = "CHƯA ĐẠT"
-                    else:
-                        eval_l2 = "CHƯA XÁC ĐỊNH" if raw_l2 else "BẮT BUỘC TRẢ LẦN 2"
+    t35=match35(m["interviews"])
+    t94=match94(m["interviews"])
+    tested=int((t35["Đánh giá"]!="CHƯA TRẢ BÀI").sum())
+    passed=int((t35["Đánh giá"]=="ĐẠT").sum())
 
-                esim_l2_dict[item94["MSNV"]] = {
-                    "Merchandiser": field_raw if field_raw else "Chưa phân bổ",
-                    "Lần chấm 02": raw_l2 if raw_l2 else "➖",
-                    "Kết quả Lần 2": eval_l2
-                }
+    c1,c2,c3,c4,c5,c6=st.columns(6)
+    c1.metric("Trade CPS Stores",m["trade_cps_stores"])
+    c2.metric("Trade DTV Stores",m["trade_dtv_stores"])
+    c3.metric("Plus Stores",m["plus_stores"])
+    c4.metric("Mystery Field Done",f'{m["mystery_field_done"]} / {MYSTERY_TARGET}')
+    c5.metric("35 NV đã trả bài",f"{tested} / 35")
+    c6.metric("Rework/Reject Plans",
+              m["trade_qc"]["REJECT"]+m["trade_qc"]["REWORK"]+
+              m["plus_qc"]["REJECT"]+m["plus_qc"]["REWORK"]+
+              m["mystery_qc"]["REJECT"]+m["mystery_qc"]["REWORK"])
 
-        # --- TOP METRICS HEADER ---
-        progress = compute_progress_metrics(sheets_data)
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
-        m1.metric("Trade CPS Stores", progress["trade_cps"])
-        m2.metric("Trade DTV Stores", progress["trade_dtv"])
-        m3.metric("Plus Stores", progress["plus_stores"])
-        m4.metric("Mystery", f'{progress["mystery_plans"]} / {MYSTERY_TARGET}')
-        m5.metric("35 NV đã có dữ liệu", f"{len(tested_dict)} / 35")
-        m6.metric("Rework / Reject", progress["rework"])
+    tabs=st.tabs(["📊 Executive","🎤 35 NV","📱 94 eSIM","➕ Audit Plus","🕵️ Mystery","👤 Leader","⚠️ Rework","🧪 Validation"])
 
-        st.divider()
-
-        # --- TABS DỰ ÁN ENTERPRISE ---
-        t_pivot, t_35nv, t_94esim, t_plus_summary, t_rework, t_mystery = st.tabs([
-            "📊 TỔNG HỢP LEADER", 
-            "🎤 35 NV TRẢ BÀI (TT1)", 
-            "📱 94 NV KHÔNG ĐẠT ESIM L1 (LẦN 2)",
-            "➕ BẢNG TỔNG HỢP AUDIT PLUS",
-            "⚠️ YÊU CẦU BỔ SUNG (REWORK)", 
-            "🕵️ MYSTERY SHOOPER (153 KỊCH BẢN)"
+    with tabs[0]:
+        overview=pd.DataFrame([
+            {"Nghiệp vụ":"Trade","Plan":m["trade_plans"],"Field Done":m["trade_field_done"],"QC Done":m["trade_qc"]["DONE"],"QC Pending":m["trade_qc"]["PENDING"]+m["trade_qc"]["PENDING_REVIEW"],"Reject/Rework":m["trade_qc"]["REJECT"]+m["trade_qc"]["REWORK"]},
+            {"Nghiệp vụ":"Plus","Plan":m["plus_plans"],"Field Done":m["plus_field_done"],"QC Done":m["plus_qc"]["DONE"],"QC Pending":m["plus_qc"]["PENDING"]+m["plus_qc"]["PENDING_REVIEW"],"Reject/Rework":m["plus_qc"]["REJECT"]+m["plus_qc"]["REWORK"]},
+            {"Nghiệp vụ":"Mystery","Plan":m["mystery_plans"],"Field Done":m["mystery_field_done"],"QC Done":m["mystery_qc"]["DONE"],"QC Pending":m["mystery_qc"]["PENDING"]+m["mystery_qc"]["PENDING_REVIEW"],"Reject/Rework":m["mystery_qc"]["REJECT"]+m["mystery_qc"]["REWORK"]},
         ])
+        st.dataframe(overview,use_container_width=True,hide_index=True)
+        st.plotly_chart(px.bar(overview,x="Nghiệp vụ",y=["Field Done","QC Done","QC Pending"],barmode="group",title="Tiến độ plan-level"),use_container_width=True)
 
-        # --- TAB 1: TỔNG HỢP LEADER (CẬP NHẬT CHUẨN SỐ LƯỢNG GỐC THEO TỪNG LEADER) ---
-        with t_pivot:
-            st.subheader(f"📌 Tiến độ & chất lượng theo Leader ({view_mode})")
-            leader_df = build_leader_summary(sheets_data, tested_dict)
-            st.dataframe(leader_df, use_container_width=True, hide_index=True)
-            if not leader_df.empty:
-                fig_lead = px.bar(leader_df, x="Leader", y=["QC Done rows", "QC Pending rows", "Rework rows"], barmode="stack", title="QC workload theo Leader")
-                st.plotly_chart(fig_lead, use_container_width=True)
+    with tabs[1]:
+        v=t35.copy()
+        if selected_leader!="Tất cả":v=v[v["Leader"]==selected_leader]
+        q=norm(search)
+        if q:v=v[v.apply(lambda r:q in norm(r["Nhân sự"]) or q in norm(r["Mã cửa hàng"]),axis=1)]
+        a,b,c,d=st.columns(4)
+        a.metric("Đã trả bài",tested);b.metric("ĐẠT ≥50",passed);c.metric("Không đạt/Chưa điểm",int(t35["Đánh giá"].isin(["KHÔNG ĐẠT","CHƯA CÓ ĐIỂM"]).sum()));d.metric("Chưa trả bài",int((t35["Đánh giá"]=="CHƯA TRẢ BÀI").sum()))
+        st.dataframe(v,use_container_width=True,hide_index=True,height=600)
 
-        # --- TAB 2: 35 NV TRẢ BÀI CÓ HIGHLIGHT PHỎNG VẤN LẦN 2 ---
-        with t_35nv:
-            st.markdown(f"<div class='report-title'>CPS — 35 NHÂN SỰ BẮT BUỘC TRẢ BÀI ({view_mode.upper()})</div>", unsafe_allow_html=True)
+    with tabs[2]:
+        v=t94.copy()
+        if selected_leader!="Tất cả":v=v[v["Leader"]==selected_leader]
+        if selected_region!="Tất cả":v=v[v["Miền"]==selected_region]
+        q=norm(search)
+        if q:v=v[v.apply(lambda r:q in norm(r["MSNV"]) or q in norm(r["Họ và Tên"]) or q in norm(r["Shop"]),axis=1)]
+        st.dataframe(v,use_container_width=True,hide_index=True,height=600)
 
-            count_pass_35 = sum(1 for v in tested_dict.values() if v["Đánh giá"] == "ĐẠT")
-            count_fail_35 = sum(1 for v in tested_dict.values() if v["Đánh giá"] == "KHÔNG ĐẠT")
-            count_unknown_score_35 = sum(1 for v in tested_dict.values() if v["Đánh giá"] == "CHƯA CÓ ĐIỂM")
-            count_not_35 = 35 - len(tested_dict)
+    with tabs[3]:
+        st.caption(f'Có nhân viên trả bài: {len(m["interviews"])} / {m["plus_plans"]} plan Plus')
+        st.dataframe(m["interviews"],use_container_width=True,hide_index=True,height=620)
 
-            df_kpi = pd.DataFrame([
-                {"Chỉ số": "Tổng NV bắt buộc", "Kết quả": 35},
-                {"Chỉ số": "Đã có dữ liệu trả bài", "Kết quả": len(tested_dict)},
-                {"Chỉ số": "ĐẠT (>=50 điểm)", "Kết quả": count_pass_35},
-                {"Chỉ số": "KHÔNG ĐẠT (<50 điểm)", "Kết quả": count_fail_35},
-                {"Chỉ số": "CHƯA CÓ ĐIỂM (cần xác minh)", "Kết quả": count_unknown_score_35},
-                {"Chỉ số": "CẦN ACTION / PV L2", "Kết quả": count_not_35 + count_fail_35 + count_unknown_score_35}
-            ])
-            
-            c_kpi, _ = st.columns([1, 1])
-            with c_kpi: st.dataframe(df_kpi, use_container_width=True, hide_index=True)
-            st.write("---")
+    with tabs[4]:
+        mp=m["mystery_plan"].copy()
+        st.metric("Mystery unique Plan",m["mystery_plans"])
+        a,b,c=st.columns(3)
+        a.metric("Field Done",m["mystery_field_done"]);b.metric("QC Done",m["mystery_qc"]["DONE"]);c.metric("QC Pending",m["mystery_qc"]["PENDING"]+m["mystery_qc"]["PENDING_REVIEW"])
+        cols=[c for c in ["Tên Plan","Mã cửa hàng","Tên Leader","Status Plan","QC Status","Ngày update","Ngày thực hiện","Hạng mục"] if c in mp.columns]
+        st.dataframe(mp[cols],use_container_width=True,hide_index=True,height=600)
 
-            res_35 = []
-            for item in TARGET_35_NV_MASTER:
-                if selected_leader != "Tất cả" and item["Leader"] != selected_leader: continue
-                nv_name = item["Tên"]
-                
-                if nv_name in tested_dict:
-                    info = tested_dict[nv_name]
-                    note_pv = info["Ghi chú PV2"]
-                else:
-                    info = {"Điểm trả bài": "➖", "Đánh giá": "CHƯA TRẢ BÀI", "QC Status": "None", "Ngày thực hiện": "None"}
-                    note_pv = "Bắt buộc phỏng vấn lần 2"
+    with tabs[5]:
+        ls=leader_summary(m)
+        st.dataframe(ls,use_container_width=True,hide_index=True)
+        if not ls.empty:
+            st.plotly_chart(px.bar(ls,x="Leader",y=["QC_Done","QC_Pending","QC_Reject_Rework"],barmode="stack",title="QC theo unique Plan"),use_container_width=True)
 
-                row_data = {
-                    "Nhân sự": nv_name,
-                    "Mã cửa hàng": item["Mã cửa hàng"],
-                    "Leader": item["Leader"],
-                    "Điểm trả bài": info["Điểm trả bài"],
-                    "Đánh giá": info["Đánh giá"],
-                    "Ghi chú PV Lần 2": note_pv,
-                    "QC Status": info["QC Status"],
-                    "Ngày thực hiện": info["Ngày thực hiện"]
-                }
+    with tabs[6]:
+        parts=[]
+        for key,name in [("trade_plan","Trade"),("plus_plan","Plus"),("mystery_plan","Mystery")]:
+            x=m[key]
+            if x.empty:continue
+            q=x["QC Status"].apply(classify_qc) if "QC Status" in x.columns else pd.Series("NONE",index=x.index)
+            r=x[q.isin(["REJECT","REWORK"])].copy()
+            if not r.empty:
+                r["Nghiệp vụ"]=name
+                parts.append(r)
+        rw=pd.concat(parts,ignore_index=True) if parts else pd.DataFrame()
+        st.dataframe(rw,use_container_width=True,hide_index=True,height=600)
 
-                if search_query:
-                    match_q = norm(search_query)
-                    if match_q not in norm(nv_name) and match_q not in norm(item["Mã cửa hàng"]):
-                        continue
+    with tabs[7]:
+        checks=pd.DataFrame([
+            {"Check":"Trade Audit sheet","Value":"PASS" if "Trade Audit" in sheets else "FAIL"},
+            {"Check":"Trade Audit Plus sheet","Value":"PASS" if "Trade Audit Plus" in sheets else "FAIL"},
+            {"Check":"Mystery Audit sheet","Value":"PASS" if "Mystery Audit" in sheets else "FAIL"},
+            {"Check":f"Round {label} Trade plans","Value":m["trade_plans"]},
+            {"Check":f"Round {label} Plus plans","Value":m["plus_plans"]},
+            {"Check":f"Round {label} Mystery plans","Value":m["mystery_plans"]},
+            {"Check":"Master 35 store có ...","Value":"FAIL" if any("..." in x["Mã cửa hàng"] for x in TARGET_35_NV_MASTER) else "PASS"},
+        ])
+        st.dataframe(checks,use_container_width=True,hide_index=True)
+        st.info("QC workload hiện đếm unique Plan, không đếm từng dòng KPI/câu hỏi. Tên người phỏng vấn lấy từ TT1 → Câu trả lời.")
 
-                res_35.append(row_data)
-
-            df_res_35 = pd.DataFrame(res_35)
-            st.dataframe(df_res_35.style.map(style_evaluation, subset=["Đánh giá"]).map(style_note_35, subset=["Ghi chú PV Lần 2"]), use_container_width=True, height=450, hide_index=True)
-
-        # --- TAB 3: 94 NV KHÔNG ĐẠT ESIM L1 (ĐO LƯỜNG LẦN 2) ---
-        with t_94esim:
-            st.markdown(f"<div class='report-title'>CPS — DANH SÁCH 94 NHÂN SỰ KHÔNG ĐẠT ESIM L1 ({view_mode.upper()})</div>", unsafe_allow_html=True)
-
-            count_has_l2 = len(esim_l2_dict)
-            count_pass_l2 = sum(1 for v in esim_l2_dict.values() if v["Kết quả Lần 2"] == "ĐẠT")
-            count_fail_l2 = sum(1 for v in esim_l2_dict.values() if v["Kết quả Lần 2"] == "CHƯA ĐẠT")
-            count_not_l2 = 94 - count_has_l2
-
-            df_kpi_94 = pd.DataFrame([
-                {"Chỉ số Đánh Giá": "Tổng NV Không đạt Esim L1", "Số lượng": 94},
-                {"Chỉ số Đánh Giá": "Đã có dữ liệu Chấm Lần 2", "Số lượng": count_has_l2},
-                {"Chỉ số Đánh Giá": "ĐẠT Lần 2 (>=50 điểm)", "Số lượng": count_pass_l2},
-                {"Chỉ số Đánh Giá": "CHƯA ĐẠT Lần 2 (<50 điểm)", "Số lượng": count_fail_l2},
-                {"Chỉ số Đánh Giá": "BẮT BUỘC TRẢ LẦN 2", "Số lượng": count_not_l2}
-            ])
-
-            c_kpi94, _ = st.columns([1, 1])
-            with c_kpi94: st.dataframe(df_kpi_94, use_container_width=True, hide_index=True)
-            st.write("---")
-
-            res_94_list = []
-            for item94 in TARGET_94_ESIM_L1:
-                if selected_leader != "Tất cả" and item94["Leader"] != selected_leader: continue
-                if selected_region != "Tất cả" and item94["Miền"] != selected_region: continue
-
-                msnv = item94["MSNV"]
-                name_norm = norm(item94["Tên"])
-
-                matched_35 = next((t for t in TARGET_35_NV_MASTER if norm(t["Tên"]) == name_norm), None)
-                if matched_35:
-                    nv_35_name = matched_35["Tên"]
-                    if nv_35_name in tested_dict:
-                        eval_l1 = tested_dict[nv_35_name]["Đánh giá"]
-                        note_35 = "Đã trả bài (ĐẠT)" if eval_l1 == "ĐẠT" else "Đã trả bài (Không đạt)"
-                    else:
-                        note_35 = "Bắt buộc phỏng vấn lần 2"
-                else:
-                    note_35 = "-"
-
-                info_l2 = esim_l2_dict.get(msnv, {"Merchandiser": "Chưa phân bổ", "Lần chấm 02": "➖", "Kết quả Lần 2": "BẮT BUỘC TRẢ LẦN 2"})
-
-                row_94 = {
-                    "STT": item94["STT"], "MSNV": item94["MSNV"], "Họ và Tên": item94["Tên"],
-                    "Shop": item94["Shop"], "Miền": item94["Miền"], "Vị trí công việc": item94["Vị trí"],
-                    "Leader Phụ Trách": item94["Leader"], "Merchandiser (Field)": info_l2["Merchandiser"],
-                    "Đối Soát 35 NV (Lần 1)": note_35, "Lần chấm 02": info_l2["Lần chấm 02"],
-                    "Kết quả Lần 2": info_l2["Kết quả Lần 2"]
-                }
-
-                if search_query:
-                    match_q = norm(search_query)
-                    if match_q not in norm(item94["MSNV"]) and match_q not in norm(item94["Tên"]) and match_q not in norm(item94["Shop"]):
-                        continue
-
-                res_94_list.append(row_94)
-
-            df_res_94 = pd.DataFrame(res_94_list)
-            styled_df_94 = df_res_94.style.map(style_evaluation, subset=["Kết quả Lần 2"]).map(style_note_35, subset=["Đối Soát 35 NV (Lần 1)"])
-            st.dataframe(styled_df_94, use_container_width=True, height=450, hide_index=True)
-
-        # --- TAB 4: BẢNG AUDIT PLUS TỔNG QUAN CHUẨN CẤU TRÚC CODE CỦI ---
-        with t_plus_summary:
-            st.subheader(f"➕ Bảng Tổng Hợp Tiến Độ Audit Plus Theo Cửa Hàng ({view_mode})")
-            s_plus_key = next((s for s in sheets_data.keys() if "plus" in norm(s)), None)
-            if s_plus_key:
-                st.dataframe(sheets_data[s_plus_key], use_container_width=True)
-            else:
-                st.warning("Không tìm thấy sheet Audit Plus trong file hiện tại. Không hiển thị dữ liệu mẫu giả.")
-
-        # --- TAB 5: YÊU CẦU BỔ SUNG ---
-        with t_rework:
-            st.subheader(f"⚠️ Danh Sách Cửa Hàng QC Note Yêu Cầu Bổ Sung / Lỗi Refuse ({view_mode})")
-            rework_details = []
-            for s_name, df_temp in sheets_data.items():
-                c_shop = next((c for c in df_temp.columns if any(k in norm(c) for k in ['shop', 'cuahang', 'mach', 'store'])), None)
-                c_lead = next((c for c in df_temp.columns if 'lead' in norm(c) or 'quanly' in norm(c)), None)
-                c_note = next((c for c in df_temp.columns if any(k in norm(c) for k in ['lydo', 'note', 'ghichu', 'qcnote', 'trave', 'rework', 'loi'])), None)
-
-                if c_shop:
-                    for idx, r in df_temp.iterrows():
-                        val_lead = str(r[c_lead]).strip() if c_lead and pd.notna(r[c_lead]) else "N/A"
-                        if selected_leader != "Tất cả" and selected_leader not in val_lead: continue
-
-                        val_note = str(r[c_note]).strip() if c_note and pd.notna(r[c_note]) else ""
-                        if any(k in norm(val_note) for k in ['thieu', 'bosung', 'rework', 'loi', 'chuadat', 'refuse', 'fail']):
-                            rework_details.append({
-                                "STT": len(rework_details) + 1,
-                                "Tên Cửa Hàng": r[c_shop],
-                                "Leader Phụ Trách": val_lead,
-                                "QC Note / Lý Do Yêu Cầu Bổ Sung": val_note,
-                                "Sheet Nguồn": s_name
-                            })
-            if rework_details:
-                st.dataframe(pd.DataFrame(rework_details), use_container_width=True, hide_index=True)
-
-        # --- TAB 6: MYSTERY SHOPPER ĐẾM THEO TỔNG 153 KỊCH BẢN CHUẨN ---
-        with t_mystery:
-            st.subheader("🕵️ Báo Cáo Tiến Độ Mystery Shopper (Tổng 153 Kịch Bản Đo Lường)")
-            
-            mystery_df = build_mystery_summary(sheets_data)
-            if mystery_df.empty:
-                st.warning("Không nhận diện được dữ liệu Mystery trong file.")
-            else:
-                total_mystery = int(mystery_df["Hoàn thành"].sum())
-                c1, c2 = st.columns(2)
-                c1.metric("Đã nhận diện", total_mystery)
-                c2.metric("Target", MYSTERY_TARGET)
-                st.progress(min(total_mystery / MYSTERY_TARGET, 1.0))
-                st.dataframe(mystery_df, use_container_width=True, hide_index=True)
-
-    except Exception as e:
-        st.error(f"Lỗi đọc dữ liệu: {e}")
+if view=="📊 CEO VIEW":
+    l1,n1=get_round("l1");l2,n2=get_round("l2")
+    rows=[]
+    for label,sheets,name in [("Lần 1",l1,n1),("Lần 2",l2,n2)]:
+        if sheets is None:continue
+        m=metrics(sheets,label)
+        rows.append({"Đợt":label,"Trade CPS":m["trade_cps_stores"],"Trade DTV":m["trade_dtv_stores"],"Plus Stores":m["plus_stores"],
+                     "Mystery Field Done":m["mystery_field_done"],"Mystery QC Done":m["mystery_qc"]["DONE"],
+                     "Trade QC Done":m["trade_qc"]["DONE"],"Plus QC Done":m["plus_qc"]["DONE"]})
+    if not rows:st.info("Nạp L1/L2 để so sánh.")
+    else:
+        df=pd.DataFrame(rows);st.dataframe(df,use_container_width=True,hide_index=True)
+        st.plotly_chart(px.bar(df,x="Đợt",y=["Trade QC Done","Plus QC Done","Mystery QC Done"],barmode="group"),use_container_width=True)
 else:
-    st.info("👋 Chưa tìm thấy dữ liệu báo cáo cho màn hình này. Vui lòng nạp file Excel ở thanh Sidebar bên trái!")
+    prefix="l1" if view=="📌 LẦN 1" else "l2"
+    label="Lần 1" if prefix=="l1" else "Lần 2"
+    sheets,fname=get_round(prefix)
+    if sheets is None:st.info(f"Chưa nạp file {label}.")
+    else:render_round(sheets,fname,label)
