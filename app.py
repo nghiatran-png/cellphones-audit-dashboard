@@ -1,3 +1,4 @@
+
 import io
 import re
 import unicodedata
@@ -12,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-APP_VERSION="3.4.0"
+APP_VERSION="3.5.0"
 PASS_SCORE=50
 MYSTERY_TARGET=153
 
@@ -188,13 +189,17 @@ def classify_qc(v):
     if s in {"done","pass","passed","approved","approve","ok","dat"}: return "DONE"
     return "UNKNOWN"
 
-def eval_score(v):
+def rounded_score(v):
+    """Điểm dùng để đánh giá và export Excel. 49.99 -> 50."""
     try:
-        x = float(v)
+        return int(round(float(v)))
     except (TypeError, ValueError):
+        return None
+
+def eval_score(v):
+    rounded = rounded_score(v)
+    if rounded is None:
         return "CHƯA CÓ ĐIỂM"
-    # Quy tắc nghiệp vụ: 49.99 làm tròn thành 50 => ĐẠT
-    rounded = round(x)
     return "ĐẠT" if rounded >= PASS_SCORE else "KHÔNG ĐẠT"
 
 # ---------------- Session/file loading ----------------
@@ -347,11 +352,14 @@ def match35(interviews):
                 cand=x[x["_name"]==norm(m["Tên"])]
         if cand.empty:
             rows.append({"Nhân sự":m["Tên"],"Mã cửa hàng":m["Mã cửa hàng"],"Leader":m["Leader"],
-                         "Điểm trả bài":pd.NA,"Đánh giá":"CHƯA TRẢ BÀI","QC Status":"NONE","Field":"","Ngày thực hiện":pd.NaT})
+                         "Điểm gốc":pd.NA,"Điểm trả bài":pd.NA,"Đánh giá":"CHƯA TRẢ BÀI",
+                         "QC Status":"NONE","Field":"","Ngày thực hiện":pd.NaT})
         else:
             r=cand.sort_values("updated_at").iloc[-1]
+            raw_score = r["score"]
             rows.append({"Nhân sự":m["Tên"],"Mã cửa hàng":m["Mã cửa hàng"],"Leader":m["Leader"],
-                         "Điểm trả bài":r["score"],"Đánh giá":r["evaluation"],"QC Status":r["qc_status"],
+                         "Điểm gốc":raw_score,"Điểm trả bài":rounded_score(raw_score),
+                         "Đánh giá":eval_score(raw_score),"QC Status":r["qc_status"],
                          "Field":r["field_name"],"Ngày thực hiện":r["updated_at"]})
     return pd.DataFrame(rows)
 
@@ -371,11 +379,15 @@ def match94(interviews):
                 cand=x[(x["_name"]==norm(m["Tên"])) & (x["_store"]==norm_code(m["Shop"]))]
         if cand.empty:
             rows.append({"STT":m["STT"],"MSNV":m["MSNV"],"Họ và Tên":m["Tên"],"Shop":m["Shop"],"Miền":m["Miền"],
-                         "Leader":m["Leader"],"Field":"","Điểm L2":pd.NA,"Kết quả L2":"BẮT BUỘC TRẢ LẦN 2"})
+                         "Leader":m["Leader"],"Field":"","Điểm L2 gốc":pd.NA,"Điểm L2":pd.NA,
+                         "Kết quả L2":"BẮT BUỘC TRẢ LẦN 2"})
         else:
             r=cand.sort_values("updated_at").iloc[-1]
+            raw_score = r["score"]
             rows.append({"STT":m["STT"],"MSNV":m["MSNV"],"Họ và Tên":m["Tên"],"Shop":m["Shop"],"Miền":m["Miền"],
-                         "Leader":m["Leader"],"Field":r["field_name"],"Điểm L2":r["score"],"Kết quả L2":r["evaluation"]})
+                         "Leader":m["Leader"],"Field":r["field_name"],
+                         "Điểm L2 gốc":raw_score,"Điểm L2":rounded_score(raw_score),
+                         "Kết quả L2":eval_score(raw_score)})
     return pd.DataFrame(rows)
 
 # ---------------- Plan-level metrics ----------------
@@ -540,6 +552,53 @@ def leader_summary(m):
         QC_Reject_Rework=("QC",lambda s:int(s.isin(["REJECT","REWORK"]).sum()))
     ).reset_index()
 
+
+def dataframe_to_excel_bytes(df, sheet_name):
+    """
+    Export đúng dữ liệu đang hiển thị.
+    Không dùng formula Excel để tự đánh giá lại -> tránh 49.99 bị đổi thành KHÔNG ĐẠT.
+    """
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+        wb = writer.book
+        ws = writer.sheets[sheet_name]
+
+        header_fmt = wb.add_format({
+            "bold": True, "font_color": "white", "bg_color": "#D70018",
+            "border": 1, "align": "center", "valign": "vcenter"
+        })
+        pass_fmt = wb.add_format({"bg_color": "#D1E7DD", "font_color": "#0F5132", "bold": True})
+        fail_fmt = wb.add_format({"bg_color": "#F8D7DA", "font_color": "#842029", "bold": True})
+        wait_fmt = wb.add_format({"bg_color": "#FFF3CD", "font_color": "#664D03", "bold": True})
+
+        for col_num, col_name in enumerate(df.columns):
+            ws.write(0, col_num, col_name, header_fmt)
+            width = min(max(len(str(col_name)) + 2,
+                            int(df[col_name].astype(str).map(len).quantile(.90)) + 2 if len(df) else 12), 42)
+            ws.set_column(col_num, col_num, width)
+
+        # Highlight kết quả nếu có
+        for candidate in ["Kết quả L2", "Đánh giá"]:
+            if candidate in df.columns:
+                c = df.columns.get_loc(candidate)
+                first_row, last_row = 1, max(len(df), 1)
+                ws.conditional_format(first_row, c, last_row, c, {
+                    "type": "text", "criteria": "containing", "value": "ĐẠT", "format": pass_fmt
+                })
+                ws.conditional_format(first_row, c, last_row, c, {
+                    "type": "text", "criteria": "containing", "value": "KHÔNG ĐẠT", "format": fail_fmt
+                })
+                ws.conditional_format(first_row, c, last_row, c, {
+                    "type": "text", "criteria": "containing", "value": "BẮT BUỘC", "format": wait_fmt
+                })
+
+        ws.freeze_panes(1, 0)
+        ws.autofilter(0, 0, len(df), len(df.columns)-1)
+
+    return output.getvalue()
+
+
 # ---------------- Sidebar ----------------
 with st.sidebar:
     st.markdown("### 🖥️ MÀN HÌNH ĐIỀU HÀNH")
@@ -626,6 +685,12 @@ def render_round(sheets,fname,label):
         c.metric("Không đạt/Chưa điểm",int(t35["Đánh giá"].isin(["KHÔNG ĐẠT","CHƯA CÓ ĐIỂM"]).sum()))
         d.metric("Chưa trả bài",int((t35["Đánh giá"]=="CHƯA TRẢ BÀI").sum()))
         st.dataframe(v,use_container_width=True,hide_index=True,height=600)
+        st.download_button(
+            "📥 Xuất Excel 35 NV",
+            data=dataframe_to_excel_bytes(v, "35_NV"),
+            file_name=f"CPS_35NV_{label.replace(' ', '_')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
     with tabs[3]:
         v=t94.copy()
@@ -634,6 +699,13 @@ def render_round(sheets,fname,label):
         q=norm(search)
         if q:v=v[v.apply(lambda r:q in norm(r["MSNV"]) or q in norm(r["Họ và Tên"]) or q in norm(r["Shop"]),axis=1)]
         st.dataframe(v,use_container_width=True,hide_index=True,height=600)
+        st.caption("Quy tắc export: Điểm L2 = điểm làm tròn; 49.99 → 50 → ĐẠT. Cột Điểm L2 gốc giữ để đối chiếu.")
+        st.download_button(
+            "📥 Xuất Excel 94 NV eSIM",
+            data=dataframe_to_excel_bytes(v, "94_ESIM_L2"),
+            file_name=f"CPS_94NV_eSIM_{label.replace(' ', '_')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
     with tabs[4]:
         st.caption(f'Có nhân viên trả bài: {len(m["interviews"])} / {m["plus_plans"]} plan Plus')
