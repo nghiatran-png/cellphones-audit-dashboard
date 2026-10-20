@@ -13,13 +13,7 @@ import streamlit as st
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
                    layout="wide", initial_sidebar_state="expanded")
 
-try:
-    from master_data import TARGET_35_NV_MASTER, TARGET_94_ESIM_L1
-except ImportError:
-    st.error("Thiếu file master_data.py (2 danh sách TARGET_35_NV_MASTER và TARGET_94_ESIM_L1).")
-    st.stop()
-
-APP_VERSION = "4.0.0"
+APP_VERSION = "4.1.0"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -468,7 +462,9 @@ def build_interviews(sheets, label, stores, default_max):
         "qc_status": tt1["QC Status"].apply(classify_qc) if "QC Status" in tt1.columns else "NONE",
         "updated_at": pd.to_datetime(tt1["Ngày update"], errors="coerce", dayfirst=True)
         if "Ngày update" in tt1.columns else pd.NaT,
+        "field_done": tt1["Status Plan"].apply(norm).isin(DONE_FIELD) if "Status Plan" in tt1.columns else False,
     })
+    out["plus_item"] = [classify_item("Plus", pl, "") for pl in out["plan_name"]]
     lead = out["store_code"].map(lead_map)
     out["Lead"] = lead.where(lead.notna() & lead.ne(""), out["lead_raw"]).replace("", "Chưa gán")
     out["score"] = out["plan_name"].map(score)
@@ -637,87 +633,40 @@ def dl_button(df, sheet, fname, key):
 
 
 # =====================================================================
-# 35 NV / 94 eSIM matching (điểm = % so với điểm tối đa)
-# =====================================================================
-def _prep(iv):
-    x = iv.copy()
-    if not x.empty:
-        x["_name"] = x["employee_name"].apply(norm)
-        x["_store"] = x["store_code"].apply(norm_code)
-        x["_id"] = x["employee_id"].apply(digits)
-    return x
-
-
-def _by_name_store(x, name, store, loose):
-    if x.empty:
-        return x
-    n = norm(name)
-    nm = x[x["_name"] == n]
-    if nm.empty and len(n) >= 6:
-        nm = x[x["_name"].str.startswith(n)]
-    if nm.empty:
-        return nm
-    by = nm[nm["_store"] == norm_code(store)]
-    return by if (not by.empty or not loose) else nm
-
-
-def _latest(c):
-    return c.sort_values("updated_at", na_position="first", kind="stable").iloc[-1]
-
-
-def _score_cols(r, thr):
-    return {"Điểm": r["score"], "Điểm tối đa": r["max_score"], "% điểm": r["pct"],
-            "Đánh giá": eval_pct(r["pct"], thr)}
-
-
-NO_SCORE = {"Điểm": np.nan, "Điểm tối đa": np.nan, "% điểm": np.nan}
-
-
-def match35(iv, thr, loose, stores):
-    x, rows = _prep(iv), []
-    lead_map = stores.set_index("Mã cửa hàng")["Lead"].to_dict() if not stores.empty else {}
-    for m in TARGET_35_NV_MASTER:
-        cand = _by_name_store(x, m["Tên"], m["Mã cửa hàng"], loose)
-        lead = lead_map.get(norm_code(m["Mã cửa hàng"]), m["Leader"])
-        base = {"Nhân sự": m["Tên"], "Mã cửa hàng": m["Mã cửa hàng"], "Leader": lead,
-                "Lead cũ (list)": m["Leader"] if canon_leader(m["Leader"]) != lead else ""}
-        if cand.empty:
-            rows.append({**base, **NO_SCORE, "Đánh giá": "CHƯA TRẢ BÀI", "QC Status": "NONE", "Field": ""})
-        else:
-            r = _latest(cand)
-            rows.append({**base, **_score_cols(r, thr), "QC Status": r["qc_status"], "Field": r["field_name"]})
-    return pd.DataFrame(rows)
-
-
-def match94(iv, label, thr, loose, stores):
-    x, rows = _prep(iv), []
-    lead_map = stores.set_index("Mã cửa hàng")["Lead"].to_dict() if not stores.empty else {}
-    missing = "BẮT BUỘC TRẢ LẦN 2" if label == "Lần 2" else "CHƯA TRẢ BÀI"
-    for m in TARGET_94_ESIM_L1:
-        cand = pd.DataFrame()
-        if not x.empty:
-            tid = digits(m["MSNV"])
-            cand = x[x["_id"] == tid] if tid else pd.DataFrame()
-            if cand.empty:
-                cand = _by_name_store(x, m["Tên"], m["Shop"], loose)
-        lead = lead_map.get(norm_code(m["Shop"]), m["Leader"])
-        base = {"STT": m["STT"], "MSNV": m["MSNV"], "Họ và Tên": m["Tên"], "Shop": m["Shop"], "Miền": m["Miền"],
-                "Leader": lead}
-        if cand.empty:
-            rows.append({**base, "Field": "", **NO_SCORE, "Kết quả L2": missing})
-        else:
-            r = _latest(cand)
-            sc = _score_cols(r, thr)
-            rows.append({**base, "Field": r["field_name"], "Điểm": sc["Điểm"], "Điểm tối đa": sc["Điểm tối đa"],
-                         "% điểm": sc["% điểm"], "Kết quả L2": sc["Đánh giá"]})
-    return pd.DataFrame(rows)
-
-
-# =====================================================================
 # Sidebar
 # =====================================================================
-for _k in ["l1_bytes", "l1_name", "l2_bytes", "l2_name"]:
-    st.session_state.setdefault(_k, None)
+DATA_DIR = Path(__file__).parent / "data"
+
+
+def saved_file(pre):
+    for ext in ("xlsx", "xls"):
+        p = DATA_DIR / f"raw_{pre}.{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+def save_raw(pre, data):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        for ext in ("xlsx", "xls"):
+            (DATA_DIR / f"raw_{pre}.{ext}").unlink(missing_ok=True)
+        (DATA_DIR / f"raw_{pre}.xlsx").write_bytes(data)
+        return True
+    except OSError:
+        return False
+
+
+for _pre in ("l1", "l2"):
+    st.session_state.setdefault(f"{_pre}_bytes", None)
+    st.session_state.setdefault(f"{_pre}_name", None)
+    st.session_state.setdefault(f"{_pre}_saved", None)
+    p = saved_file(_pre)
+    if st.session_state[f"{_pre}_bytes"] is None and p is not None:  # mở lại app -> tự nạp file đã lưu
+        st.session_state[f"{_pre}_bytes"] = p.read_bytes()
+        st.session_state[f"{_pre}_name"] = p.name
+        st.session_state[f"{_pre}_saved"] = pd.Timestamp(p.stat().st_mtime, unit="s", tz="UTC") \
+            .tz_convert("Asia/Ho_Chi_Minh").strftime("%d/%m %H:%M")
 
 default_stores = load_default_stores()
 
@@ -728,18 +677,22 @@ with st.sidebar:
     for lbl, pre in [("Raw Data Lần 1", "l1"), ("Raw Data Lần 2", "l2")]:
         up = st.file_uploader(lbl, type=["xlsx", "xls"], key=f"up_{pre}")
         if up:
-            st.session_state[f"{pre}_bytes"], st.session_state[f"{pre}_name"] = up.getvalue(), up.name
-            st.success(f"Đã nạp {pre.upper()}")
+            data = up.getvalue()
+            if data != st.session_state[f"{pre}_bytes"]:
+                st.session_state[f"{pre}_bytes"], st.session_state[f"{pre}_name"] = data, up.name
+                ok = save_raw(pre, data)
+                st.session_state[f"{pre}_saved"] = pd.Timestamp.now(tz="Asia/Ho_Chi_Minh").strftime("%d/%m %H:%M") if ok else None
+        if st.session_state[f"{pre}_bytes"] is not None:
+            when = st.session_state[f"{pre}_saved"]
+            st.caption(f"✅ {pre.upper()}: {st.session_state[f'{pre}_name']}" + (f" · lưu lúc {when}" if when else " · chưa lưu được"))
     st.divider()
     stores_all = default_stores
     leaders = sorted(set(stores_all["Lead"]) - {""}) if not stores_all.empty else []
     selected_leader = st.selectbox("Lead", ["Tất cả"] + leaders)
-    selected_region = st.selectbox("Miền (bảng 94 eSIM)", ["Tất cả", "Miền Bắc", "Miền Nam"])
     search = st.text_input("Tìm cửa hàng / NV / MSNV", "")
     with st.expander("⚙️ Thiết lập"):
         THR = st.slider("Ngưỡng điểm trả bài (%)", 50, 100, 80, 5)
         DEFAULT_MAX = st.number_input("Điểm tối đa (khi raw thiếu 'Thang điểm')", 1, 1000, 100)
-        loose = st.checkbox("Khớp NV theo tên khi lệch mã shop", value=False)
         u3 = st.file_uploader("DS cửa hàng thay thế (CSV/Excel)", type=["csv", "xlsx", "xls"], key="up_store")
     stores = default_stores
     if u3:
@@ -934,68 +887,62 @@ def tab_campus(C):
     pie_chart(cnt.index.tolist(), cnt.values.tolist(), "Trạng thái CAMPUS")
 
 
-def tab_interviews(IV, label):
+def tab_interviews(IV):
+    st.caption("Danh sách lấy trực tiếp từ dữ liệu chấm hiện tại của Field/QC (dòng TT1 của từng plan Plus), không dùng danh sách cố định.")
     if IV.empty:
         st.info("Chưa có dữ liệu trả bài (cần sheet Trade Audit Plus có dòng TT1).")
         return
     d = IV.copy()
     d["Đánh giá"] = d["pct"].apply(lambda v: eval_pct(v, THR))
-    d = lead_filter(d)
-    d = text_filter(d, ["employee_name", "employee_id", "store_code"], search)
+    d = text_filter(lead_filter(d), ["employee_name", "employee_id", "store_code", "plan_name"], search)
+    if d.empty:
+        st.info("Không có bài trả bài nào theo bộ lọc hiện tại.")
+        return
     low = d[d["Đánh giá"].str.startswith("DƯỚI")]
     ok = d[d["Đánh giá"].eq("ĐẠT")]
-    c = st.columns(4)
-    c[0].metric("Nhân sự đã trả bài", len(d))
+    nos = d[d["Đánh giá"].eq("CHƯA CÓ ĐIỂM")]
+    c = st.columns(5)
+    c[0].metric("Bài trả bài (plan)", len(d))
     c[1].metric(f"Đạt (≥ {THR}%)", len(ok))
     c[2].metric(f"Dưới {THR}% → trả bài đợt 2", len(low))
-    c[3].metric("Chưa có điểm", int(d["Đánh giá"].eq("CHƯA CÓ ĐIỂM").sum()))
+    c[3].metric("Chưa có điểm", len(nos))
+    c[4].metric("Field chưa xong", int((~d["field_done"]).sum()))
+
+    kq = np.where(d["Đánh giá"].eq("ĐẠT"), "Đạt",
+                  np.where(d["Đánh giá"].str.startswith("DƯỚI"), f"Dưới {THR}%", "Chưa có điểm"))
+    cmap = {"Đạt": "#12b76a", f"Dưới {THR}%": "#f04438", "Chưa có điểm": "#98a2b3"}
     a, b = st.columns(2)
     with a:
-        g = d.assign(KQ=np.where(d["Đánh giá"].eq("ĐẠT"), "Đạt", np.where(d["Đánh giá"].str.startswith("DƯỚI"),
-                                                                           f"Dưới {THR}%", "Chưa có điểm")))
-        g = g.groupby(["Lead", "KQ"]).size().reset_index(name="Số NV")
-        bar_chart(g, "Lead", "Số NV", "Kết quả trả bài theo Lead", barmode="stack", color="KQ",
-                  color_discrete_map={"Đạt": "#12b76a", f"Dưới {THR}%": "#f04438", "Chưa có điểm": "#98a2b3"})
+        g = d.assign(KQ=kq).groupby(["Lead", "KQ"]).size().reset_index(name="Số bài")
+        bar_chart(g, "Lead", "Số bài", "Kết quả trả bài theo Lead", barmode="stack", color="KQ", color_discrete_map=cmap)
     with b:
-        pie_chart(["Đạt", f"Dưới {THR}%", "Chưa có điểm"],
-                  [len(ok), len(low), len(d) - len(ok) - len(low)], "Tỷ lệ đạt / chưa đạt",
-                  {"Đạt": "#12b76a", f"Dưới {THR}%": "#f04438", "Chưa có điểm": "#98a2b3"})
+        pie_chart(["Đạt", f"Dưới {THR}%", "Chưa có điểm"], [len(ok), len(low), len(nos)],
+                  "Tỷ lệ đạt / chưa đạt", cmap)
+    g = d.assign(KQ=kq).groupby(["plus_item", "KQ"]).size().reset_index(name="Số bài") \
+        .rename(columns={"plus_item": "Plus"})
+    bar_chart(g, "Plus", "Số bài", "Kết quả theo Plus 1 → 5", barmode="stack", color="KQ", color_discrete_map=cmap)
+
+    ren = {"employee_name": "Nhân viên", "employee_id": "MSNV", "store_code": "Mã cửa hàng", "plus_item": "Plus",
+           "score": "Điểm", "max_score": "Điểm tối đa", "pct": "% điểm", "qc_status": "QC", "field_name": "Field chấm"}
+    cols = ["Lead", "employee_name", "employee_id", "store_code", "plus_item", "score", "max_score", "pct",
+            "field_done", "qc_status", "field_name"]
+
+    def fmt(x):
+        y = x[cols].rename(columns=ren)
+        y["Field"] = np.where(x["field_done"].values, "Đã Field", "Chưa Field")
+        return y.drop(columns="field_done")
+
     st.markdown(f"#### Nhân sự dưới {THR}% – yêu cầu trả bài đợt 2 và follow")
-    cols = ["Lead", "employee_name", "employee_id", "store_code", "score", "max_score", "pct", "qc_status", "field_name"]
-    ren = {"employee_name": "Nhân viên", "employee_id": "MSNV", "store_code": "Mã cửa hàng", "score": "Điểm",
-           "max_score": "Điểm tối đa", "pct": "% điểm", "qc_status": "QC", "field_name": "Field chấm"}
-    lt = low.sort_values("pct")[cols].rename(columns=ren)
+    lt = fmt(low.sort_values("pct"))
     lt["Đánh giá"] = f"DƯỚI {THR}% – TRẢ BÀI ĐỢT 2"
-    show_df(lt, height=420, column_config={"% điểm": st.column_config.NumberColumn(format="%.1f%%")})
+    show_df(lt, height=460, column_config={"% điểm": st.column_config.NumberColumn(format="%.1f%%")})
     if not lt.empty:
         dl_button(lt, "Duoi_nguong_tra_bai_d2", "NV_duoi_nguong_tra_bai_dot2.xlsx", "dl_low")
-    with st.expander("Toàn bộ nhân sự đã trả bài"):
-        allv = d.sort_values("pct")[cols + ["Đánh giá"]].rename(columns=ren)
-        show_df(allv, height=420)
-
-    t35 = match35(IV, THR, loose, stores)
-    t94 = match94(IV, label, THR, loose, stores)
-    t35 = text_filter(lead_filter(t35.rename(columns={"Leader": "Lead"})), ["Nhân sự", "Mã cửa hàng"], search)
-    t94 = lead_filter(t94.rename(columns={"Leader": "Lead"}))
-    if selected_region != "Tất cả":
-        t94 = t94[t94["Miền"] == selected_region]
-    t94 = text_filter(t94, ["MSNV", "Họ và Tên", "Shop"], search)
-    s35, s94 = st.tabs(["🎤 35 NV cần test", "📱 94 NV eSIM"])
-    with s35:
-        a = st.columns(4)
-        a[0].metric("Đã trả bài", int((t35["Đánh giá"] != "CHƯA TRẢ BÀI").sum()))
-        a[1].metric("Đạt", int((t35["Đánh giá"] == "ĐẠT").sum()))
-        a[2].metric(f"Dưới {THR}%", int(t35["Đánh giá"].str.startswith("DƯỚI").sum()))
-        a[3].metric("Chưa trả bài", int((t35["Đánh giá"] == "CHƯA TRẢ BÀI").sum()))
-        show_df(t35, height=520, column_config={"% điểm": st.column_config.NumberColumn(format="%.1f%%")})
-        dl_button(t35, "35_NV", f"CPS_35NV_{label.replace(' ', '_')}.xlsx", "dl_35")
-    with s94:
-        a = st.columns(3)
-        a[0].metric("Đã trả bài", int((~t94["Kết quả L2"].isin(["CHƯA TRẢ BÀI", "BẮT BUỘC TRẢ LẦN 2"])).sum()))
-        a[1].metric("Đạt", int((t94["Kết quả L2"] == "ĐẠT").sum()))
-        a[2].metric(f"Dưới {THR}%", int(t94["Kết quả L2"].str.startswith("DƯỚI").sum()))
-        show_df(t94, height=520, column_config={"% điểm": st.column_config.NumberColumn(format="%.1f%%")})
-        dl_button(t94, "94_eSIM", f"CPS_94NV_eSIM_{label.replace(' ', '_')}.xlsx", "dl_94")
+    with st.expander("Toàn bộ bài trả bài hiện tại"):
+        allv = fmt(d.sort_values("pct"))
+        allv["Đánh giá"] = d.sort_values("pct")["Đánh giá"].values
+        show_df(allv, height=460, column_config={"% điểm": st.column_config.NumberColumn(format="%.1f%%")})
+        dl_button(allv, "Tra_bai_Plus", "Tra_bai_Plus_hien_tai.xlsx", "dl_all_iv")
 
 
 def tab_reject(P):
@@ -1061,7 +1008,7 @@ def render_round(file_bytes, fname, label):
     cps_m, dtv_m, my_m, ls = analyze(P, label)
     camp = campus_matrix(P)
     tabs = st.tabs(["📊 Tổng quan", "🏬 CPS (4 hạng mục)", "🏪 DTV", "➕ Plus 1–5", "🕵️ Mystery",
-                    "🎓 CAMPUS", "🎤 Trả bài (<80%)", "⚠️ Từ chối", "🧪 Kiểm tra"])
+                    "🎓 CAMPUS", "🎤 Trả bài Plus (<80%)", "⚠️ Từ chối", "🧪 Kiểm tra"])
     with tabs[0]:
         tab_overview(P, cps_m, dtv_m, my_m, ls, label)
     with tabs[1]:
@@ -1078,7 +1025,7 @@ def render_round(file_bytes, fname, label):
     with tabs[5]:
         tab_campus(camp)
     with tabs[6]:
-        tab_interviews(bundle["IV"], label)
+        tab_interviews(bundle["IV"])
     with tabs[7]:
         tab_reject(P)
     with tabs[8]:
