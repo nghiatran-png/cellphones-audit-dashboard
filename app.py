@@ -15,7 +15,7 @@ import streamlit as st
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
                    layout="wide", initial_sidebar_state="expanded")
 
-APP_VERSION = "4.3.0"
+APP_VERSION = "4.4.0"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -87,6 +87,12 @@ section[data-testid="stSidebar"]{background:#fff;border-right:1px solid var(--li
 .welcome{background:#fff;border:1px dashed #d0d5dd;border-radius:18px;padding:34px 38px;max-width:760px;margin:30px auto}
 .welcome .wt{font-size:22px;font-weight:800;color:var(--ink)}.welcome .ws{color:var(--muted);margin:6px 0 16px}
 .welcome ol{color:#344054;line-height:1.9;margin:0;padding-left:20px}
+.st-key-bell_alert,.st-key-bell_ok{position:fixed;top:10px;right:96px;z-index:1000;width:auto!important}
+.st-key-bell_alert button,.st-key-bell_ok button{border-radius:999px;font-weight:800;padding:6px 16px;box-shadow:0 6px 18px rgba(16,24,40,.18)}
+.st-key-bell_alert button{background:#d92d20;color:#fff;border:2px solid #fff;animation:ring 1.6s infinite}
+.st-key-bell_alert button:hover{background:#b42318;color:#fff;border-color:#fff}
+.st-key-bell_ok button{background:#fff;color:#475467;border:1px solid var(--line)}
+@keyframes ring{0%,100%{box-shadow:0 0 0 0 rgba(217,45,32,.55)}50%{box-shadow:0 0 0 12px rgba(217,45,32,0)}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -182,7 +188,7 @@ def _cell_style(v):
         return ""
     if v.startswith("✅") or v == "ĐẠT":
         return "background-color:#ecfdf3;color:#067647;font-weight:600"
-    if v.startswith("❌") or v.startswith("CHƯA ĐẠT"):
+    if v.startswith("❌") or v.startswith("CHƯA ĐẠT") or v.startswith("🚨"):
         return "background-color:#fef3f2;color:#b42318;font-weight:600"
     if v.startswith("🕓"):
         return "background-color:#fffaeb;color:#b54708;font-weight:600"
@@ -815,6 +821,140 @@ def dl_button(df, sheet, fname, key):
 
 
 # =====================================================================
+# Danh sách nhân sự -> kiểm tra đối tượng phỏng vấn Plus
+# =====================================================================
+STAFF_FILE = Path(__file__).parent / "nhan_su.csv"
+STAFF_COLS = ["id", "pos", "store", "status"]
+DEFAULT_ALLOWED = "bán hàng, trưởng cửa hàng, quản lý cửa hàng, trợ lý cửa hàng, aio"
+
+
+def norm_id(v):
+    return "" if pd.isna(v) else re.sub(r"[^A-Z0-9]", "", str(v).upper())
+
+
+def _pick_col(cols, names):
+    return next((c for c in cols if norm(c) in names), None)
+
+
+@st.cache_data(show_spinner="Đang đọc danh sách nhân sự...", max_entries=3)
+def parse_staff(file_bytes, name=""):
+    empty = pd.DataFrame(columns=STAFF_COLS)
+    try:
+        if str(name).lower().endswith((".xlsx", ".xls")):
+            xls = pd.ExcelFile(io.BytesIO(file_bytes))
+            sheets = sorted([s for s in xls.sheet_names if "nhan su" in norm(s)], key=lambda s: "danh sach" not in norm(s))
+            raws = [pd.read_excel(xls, sheet_name=s, dtype=str) for s in sheets]
+        else:
+            raws = [pd.read_csv(io.BytesIO(file_bytes), dtype=str)]
+    except Exception:
+        return empty
+    frames = []
+    for r in raws:
+        c_id = _pick_col(r.columns, {"ma nhan vien", "id nhan vien"})
+        c_pos = _pick_col(r.columns, {"vi tri cong viec"})
+        if c_id is None or c_pos is None:
+            continue
+        c_st = _pick_col(r.columns, {"don vi cong tac", "ma cua hang"})
+        c_sta = _pick_col(r.columns, {"trang thai lam viec", "trang thai cong viec"})
+
+        def col(c, r=r):
+            return r[c].fillna("").astype(str).str.strip() if c else ""
+
+        frames.append(pd.DataFrame({"id": r[c_id].apply(norm_id), "pos": col(c_pos), "store": col(c_st), "status": col(c_sta)}))
+    if not frames:
+        return empty
+    d = pd.concat(frames, ignore_index=True)
+    d = d[d["id"] != ""].replace("", np.nan)
+    return d.groupby("id", as_index=False).first().fillna("")
+
+
+def staff_signature():
+    try:
+        stt = STAFF_FILE.stat()
+        return f"{stt.st_mtime_ns}-{stt.st_size}"
+    except OSError:
+        return "missing"
+
+
+@st.cache_data(show_spinner=False)
+def load_default_staff(sig=""):
+    if not STAFF_FILE.exists():
+        return pd.DataFrame(columns=STAFF_COLS)
+    return parse_staff(STAFF_FILE.read_bytes(), STAFF_FILE.name)
+
+
+def check_audience(IV, staff, allowed_kw):
+    """Gắn cờ bài Plus sai đối tượng: MSNV không thuộc vị trí được phép phỏng vấn."""
+    if IV is None or IV.empty:
+        return IV
+    d = IV.copy()
+    d["Vị trí (nhân sự)"], d["Trạng thái làm việc"] = "", ""
+    d["Kiểm tra đối tượng"], d["Sai đối tượng"] = "Chưa kiểm tra", False
+    kws = [norm(k) for k in str(allowed_kw).split(",") if norm(k)]
+    if staff is None or staff.empty or not kws:
+        return d
+    sm = staff.set_index("id")
+    key = d["employee_id"].apply(norm_id)
+    pos, stat = key.map(sm["pos"]), key.map(sm["status"])
+    miss = pos.isna() & key.ne("")
+    if miss.any():  # MSNV trong bài không có tiền tố chữ -> so khớp theo phần số (chỉ khi duy nhất)
+        sdg = staff.assign(dg=staff["id"].str.replace(r"\D", "", regex=True).str.lstrip("0"))
+        uniq = sdg[~sdg["dg"].duplicated(keep=False) & sdg["dg"].ne("")].set_index("dg")
+        dk = key.str.replace(r"\D", "", regex=True).str.lstrip("0")
+        pos = pos.where(~miss, dk.map(uniq["pos"]))
+        stat = stat.where(~miss, dk.map(uniq["status"]))
+    known = pos.notna()
+    ok = pos.apply(lambda p: isinstance(p, str) and any(k in norm(p) for k in kws))
+    reason = pd.Series(np.select(
+        [key.eq(""), ~known, known & pos.astype(str).str.strip().eq(""), ~ok],
+        ["Bài thiếu MSNV", "MSNV không có trong danh sách nhân sự", "Danh sách nhân sự chưa ghi vị trí",
+         "Vị trí không thuộc đối tượng phỏng vấn"], ""), index=d.index)
+    d["Vị trí (nhân sự)"], d["Trạng thái làm việc"] = pos.fillna(""), stat.fillna("")
+    d["Sai đối tượng"] = reason.ne("")
+    d["Kiểm tra đối tượng"] = np.where(d["Sai đối tượng"], "🚨 SAI ĐỐI TƯỢNG – " + reason, "✅ Đúng đối tượng")
+    return d
+
+
+def alert_table(alerts):
+    return pd.DataFrame({
+        "Lead": alerts["Lead"], "Nhân viên (trong bài)": alerts["employee_name"], "MSNV": alerts["employee_id"],
+        "Mã cửa hàng": alerts["store_code"], "Plus": alerts["plus_item"],
+        "Vị trí (theo danh sách nhân sự)": alerts["Vị trí (nhân sự)"].replace("", "— không có trong danh sách —"),
+        "Trạng thái làm việc": alerts["Trạng thái làm việc"],
+        "Lý do": alerts["Kiểm tra đối tượng"].str.replace("🚨 SAI ĐỐI TƯỢNG – ", "", regex=False)})
+
+
+_dialog = getattr(st, "dialog", None) or getattr(st, "experimental_dialog", None)
+
+
+def _alerts_body(alerts):
+    st.error(f"Có {len(alerts)} bài Plus phỏng vấn SAI ĐỐI TƯỢNG. Chỉ nhận bài của nhân viên bán hàng, "
+             "trưởng/quản lý cửa hàng, trợ lý cửa hàng và các vị trí AIO.")
+    t = alert_table(alerts)
+    show_df(t, height=380)
+    dl_button(t, "Sai_doi_tuong", "Bai_Plus_sai_doi_tuong.xlsx", "dl_alert_dialog")
+
+
+show_alerts = _dialog("🚨 Cảnh báo: bài Plus phỏng vấn sai đối tượng", width="large")(_alerts_body) if _dialog else None
+
+
+def bell(alerts, tag):
+    """Chuông cảnh báo góc trên bên phải: đỏ nhấp nháy khi có bài sai đối tượng; tự bật popup 1 lần khi có cảnh báo mới."""
+    n = len(alerts)
+    clicked = st.button(f"🔔 {n} bài sai đối tượng" if n else "🔔 Không có cảnh báo",
+                        key="bell_alert" if n else "bell_ok", help="Bài Plus phỏng vấn sai đối tượng")
+    sig = f"{tag}|{n}"
+    auto = n > 0 and st.session_state.get("bell_seen") != sig
+    if auto:
+        st.session_state["bell_seen"] = sig
+    if n and (clicked or auto):
+        if show_alerts:
+            show_alerts(alerts)
+        else:
+            _alerts_body(alerts)
+
+
+# =====================================================================
 # Sidebar
 # =====================================================================
 DATA_DIR = Path(__file__).parent / "data"
@@ -878,6 +1018,9 @@ with st.sidebar:
     with st.expander("⚙️ Thiết lập"):
         THR = st.slider("Ngưỡng điểm trả bài (%)", 50, 100, 80, 5)
         DEFAULT_MAX = st.number_input("Điểm tối đa (khi raw thiếu 'Thang điểm')", 1, 1000, 100)
+        ALLOWED_KW = st.text_input("Vị trí được phép phỏng vấn Plus (từ khóa, cách nhau bằng dấu phẩy)", DEFAULT_ALLOWED,
+                                   help="Bài Plus của MSNV có vị trí không chứa từ khóa nào ở đây sẽ bị báo SAI ĐỐI TƯỢNG.")
+        u4 = st.file_uploader("Danh sách nhân sự mới (Excel/CSV)", type=["xlsx", "xls", "csv"], key="up_staff")
         CAMPUS_KW = st.text_input("Từ khóa nhận diện CAMPUS", "CAMPUS",
                                   help="App xếp plan vào CAMPUS khi từ khóa này có trong Mã cửa hàng, Hệ thống hoặc Tên plan.")
         u3 = st.file_uploader("DS cửa hàng thay thế (CSV/Excel)", type=["csv", "xlsx", "xls"], key="up_store")
@@ -888,9 +1031,26 @@ with st.sidebar:
             st.warning("Không đọc được DS cửa hàng vừa nạp, dùng bảng mặc định.")
         else:
             stores = merge_flags(parsed, default_stores)
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+    except OSError:
+        pass
+    if u4:
+        try:
+            for ext in (".xlsx", ".xls", ".csv"):
+                (DATA_DIR / f"nhan_su_upload{ext}").unlink(missing_ok=True)
+            (DATA_DIR / f"nhan_su_upload{Path(u4.name).suffix.lower()}").write_bytes(u4.getvalue())
+        except OSError:
+            pass
+    _sp = next((p for ext in (".xlsx", ".xls", ".csv") if (p := DATA_DIR / f"nhan_su_upload{ext}").exists()), None)
+    staff = parse_staff(_sp.read_bytes(), _sp.name) if _sp else pd.DataFrame(columns=STAFF_COLS)
+    if staff.empty:
+        staff = load_default_staff(staff_signature())
     FLAGS_OK = (not stores.empty) and bool((stores["Mystery"] == "Có").any())
     st.markdown(chip(f"DS cửa hàng: {len(stores)} shop" if len(stores) else "⚠️ Thiếu store_master.csv",
                      "dark" if len(stores) else "warn"), unsafe_allow_html=True)
+    st.markdown(chip(f"Danh sách nhân sự: {len(staff):,} người" if len(staff) else "⚠️ Chưa có danh sách nhân sự (nhan_su.csv)",
+                     "dark" if len(staff) else "warn"), unsafe_allow_html=True)
     if len(stores) and not FLAGS_OK:
         st.markdown(chip("⚠️ store_master.csv là bản cũ (thiếu cột Mystery/L2)", "warn"), unsafe_allow_html=True)
 
@@ -936,7 +1096,10 @@ def safe(fn, *args, **kw):
             st.code(traceback.format_exc())
 
 
-def tab_overview(P, cps_m, dtv_m, my_m, ls, label):
+def tab_overview(P, cps_m, dtv_m, my_m, ls, label, n_alert=0):
+    if n_alert:
+        st.error(f"🚨 Có {n_alert} bài Plus phỏng vấn SAI ĐỐI TƯỢNG. Bấm chuông 🔔 ở góc trên bên phải "
+                 "hoặc mở tab 'Trả bài Plus' để xem chi tiết.")
     plus = P[P["Nghiệp vụ"] == "Plus"]
     my_t = my_m[~my_m["Ngoài DS giao"]]
     cd, ct = int(cps_m["_done"].sum()), len(cps_m)
@@ -1139,7 +1302,8 @@ def tab_interviews(IV):
         return
     d = need_cols(IV.copy(), {"field_done": False, "plus_item": "Plus ?", "qc_status": "NONE", "Lead": "Chưa gán",
                               "field_name": "", "employee_id": "", "store_code": "", "pct": np.nan,
-                              "score": np.nan, "max_score": np.nan})
+                              "score": np.nan, "max_score": np.nan, "Sai đối tượng": False,
+                              "Kiểm tra đối tượng": "Chưa kiểm tra", "Vị trí (nhân sự)": "", "Trạng thái làm việc": ""})
     d["Kết luận"] = d["pct"].apply(lambda v: eval_pct(v, THR))
     d = text_filter(lead_filter(d), ["employee_name", "employee_id", "store_code", "plan_name"], search)
     if d.empty:
@@ -1148,12 +1312,22 @@ def tab_interviews(IV):
     low = d[d["Kết luận"].str.startswith("CHƯA ĐẠT")]
     ok = d[d["Kết luận"].eq("ĐẠT")]
     nos = d[d["Kết luận"].eq("CHƯA CÓ ĐIỂM")]
-    c = st.columns(5)
+    wrong = d[d["Sai đối tượng"].astype(bool)]
+    c = st.columns(6)
     c[0].metric("Số bài đã chấm", len(d))
     c[1].metric(f"Đạt (≥ {THR}%)", len(ok))
     c[2].metric(f"Chưa đạt (< {THR}%)", len(low))
     c[3].metric("Chưa có điểm", len(nos))
     c[4].metric("Field chưa xong", int((~d["field_done"].astype(bool)).sum()))
+    c[5].metric("🚨 Sai đối tượng", len(wrong))
+    if len(wrong):
+        st.error(f"🚨 Có {len(wrong)} bài Plus phỏng vấn SAI ĐỐI TƯỢNG (MSNV không thuộc nhân viên bán hàng, "
+                 "trưởng/quản lý cửa hàng, trợ lý cửa hàng hoặc vị trí AIO theo danh sách nhân sự).")
+        wt = alert_table(wrong)
+        show_df(wt, height=300)
+        dl_button(wt, "Sai_doi_tuong", "Bai_Plus_sai_doi_tuong.xlsx", "dl_wrong_tab")
+    elif d["Kiểm tra đối tượng"].eq("Chưa kiểm tra").all():
+        st.warning("Chưa kiểm tra được đối tượng phỏng vấn vì chưa có danh sách nhân sự (nhan_su.csv).")
 
     kq = np.where(d["Kết luận"].eq("ĐẠT"), "Đạt",
                   np.where(d["Kết luận"].str.startswith("CHƯA ĐẠT"), f"Chưa đạt (<{THR}%)", "Chưa có điểm"))
@@ -1172,7 +1346,8 @@ def tab_interviews(IV):
     def fmt(x):
         y = pd.DataFrame({
             "Lead": x["Lead"], "Nhân viên": x["employee_name"], "MSNV": x["employee_id"],
-            "Mã cửa hàng": x["store_code"], "Plus": x["plus_item"], "Điểm": x["score"],
+            "Mã cửa hàng": x["store_code"], "Plus": x["plus_item"],
+            "Vị trí": x["Vị trí (nhân sự)"], "Đối tượng": x["Kiểm tra đối tượng"], "Điểm": x["score"],
             "Điểm tối đa": x["max_score"], "% điểm": x["pct"],
             "Trạng thái Field": np.where(x["field_done"].astype(bool), "Đã xong", "Chưa xong"),
             "Trạng thái QC": x["qc_status"].map(QC_LABEL).fillna("Khác"),
@@ -1221,6 +1396,9 @@ def tab_validation(P, bundle, label):
               ("Số cửa hàng trong danh sách (store_master.csv)", len(stores)),
               ("Số cửa hàng được gắn cờ Mystery (cần = 125)", n_flag if n_flag else "THIẾU – cần upload store_master.csv bản mới"),
               ("Số cửa hàng thuộc Lần 2 (cần = 174)", n_l2 if n_l2 else "THIẾU – cần upload store_master.csv bản mới"),
+              ("Số nhân sự trong danh sách nhân sự", len(staff) if len(staff) else "THIẾU – cần file nhan_su.csv"),
+              ("Số bài Plus sai đối tượng", int(bundle["IV"]["Sai đối tượng"].sum())
+               if "Sai đối tượng" in bundle["IV"].columns else "Chưa kiểm tra"),
               ("Plan chưa nhận diện được hạng mục", int(P["Hạng mục"].isin(["Trade khác", "Plus ?"]).sum())),
               ("Plan có trạng thái QC không nhận diện được", int(P["QC"].eq("UNKNOWN").sum())),
               ("Cửa hàng có trong raw nhưng không có trong danh sách", len(set(P["store"]) - set(stores["Mã cửa hàng"])))]
@@ -1260,13 +1438,17 @@ def render_round(file_bytes, fname, label):
     if not FLAGS_OK:
         st.warning("File store_master.csv trên GitHub là bản cũ (thiếu cột Mystery / L2). "
                    "Hãy upload lại store_master.csv bản mới để số liệu Mystery và Lần 2 đúng.")
+    IVc = check_audience(bundle["IV"], staff, ALLOWED_KW)
+    bundle = {**bundle, "IV": IVc}
+    alerts = IVc[IVc["Sai đối tượng"]] if (not IVc.empty and "Sai đối tượng" in IVc.columns) else IVc.iloc[0:0]
+    bell(alerts, f"{fname}|{label}")
     cps_m, dtv_m, my_m, ls = analyze(P, label)
     camp = campus_matrix(P)
     tabs = st.tabs(["📊 Tổng quan", "🏬 CPS – 4 hạng mục", "🏪 DTV", "➕ Plus 1–5", "🕵️ Mystery",
                     "🎓 CAMPUS", "🎤 Trả bài Plus", "⚠️ Bị từ chối", "🧪 Kiểm tra dữ liệu"])
     trade = P[P["Nghiệp vụ"] == "Trade"]
     with tabs[0]:
-        safe(tab_overview, P, cps_m, dtv_m, my_m, ls, label)
+        safe(tab_overview, P, cps_m, dtv_m, my_m, ls, label, len(alerts))
     with tabs[1]:
         safe(tab_trade, cps_m, CPS_ITEMS, "CPS", "cps", int((trade["Hệ thống"] == "CPS").sum()), label)
     with tabs[2]:
