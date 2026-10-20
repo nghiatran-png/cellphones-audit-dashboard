@@ -1,3 +1,5 @@
+import base64
+import gzip
 import html
 import io
 import math
@@ -15,7 +17,7 @@ import streamlit as st
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
                    layout="wide", initial_sidebar_state="expanded")
 
-APP_VERSION = "4.4.0"
+APP_VERSION = "4.5.0"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -330,7 +332,108 @@ PCT_CFG = lambda cols: {c: st.column_config.ProgressColumn(c, min_value=0, max_v
 # =====================================================================
 # Store master (Mã cửa hàng -> địa chỉ, Lead, cờ Mystery / L2)
 # =====================================================================
-STORE_FILE = Path(__file__).parent / "store_master.csv"
+def find_file(name):
+    """Tìm file dữ liệu cạnh app.py (hoặc thư mục con) để không bị lệch vị trí khi upload GitHub."""
+    base = Path(__file__).parent
+    for p in (base / name, Path.cwd() / name):
+        if p.exists():
+            return p
+    stem, ext = name.rsplit(".", 1)
+    try:
+        hits = [h for h in base.rglob(f"{stem}*.{ext}") if ".git" not in h.parts and "data" not in h.parts]
+        return sorted(hits, key=lambda h: len(h.parts))[0] if hits else None
+    except OSError:
+        return None
+
+
+STORE_FILE = find_file("store_master.csv")
+_EMBEDDED_STORES = """
+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
+4jQ53eQmAujPv9oczv8DQLcHxQp9AAA=
+"""
 STORE_COLS = ["Mã cửa hàng", "Hệ thống", "Miền", "Địa chỉ cửa hàng", "Lead", "Mystery", "L2"]
 
 
@@ -394,15 +497,20 @@ def store_signature():
     try:
         stt = STORE_FILE.stat()
         return f"{stt.st_mtime_ns}-{stt.st_size}"
-    except OSError:
+    except (OSError, AttributeError):
         return "missing"
 
 
 @st.cache_data(show_spinner=False)
 def load_default_stores(sig=""):
-    if not STORE_FILE.exists():
-        return _empty_stores()
-    return parse_store_master(STORE_FILE.read_bytes(), STORE_FILE.name)
+    """Ưu tiên store_master.csv trên GitHub (nếu đủ cột Mystery/L2); không có hoặc là bản cũ thì dùng bản tích hợp sẵn."""
+    df = _empty_stores()
+    if STORE_FILE is not None and STORE_FILE.exists():
+        df = parse_store_master(STORE_FILE.read_bytes(), STORE_FILE.name)
+        if not df.empty and bool((df["Mystery"] == "Có").any()):
+            return df, f"file {STORE_FILE.name}"
+    emb = parse_store_master(gzip.decompress(base64.b64decode("".join(_EMBEDDED_STORES.split()))), "store_master.csv")
+    return emb, "bản tích hợp sẵn"
 
 
 def merge_flags(stores, default):
@@ -823,7 +931,7 @@ def dl_button(df, sheet, fname, key):
 # =====================================================================
 # Danh sách nhân sự -> kiểm tra đối tượng phỏng vấn Plus
 # =====================================================================
-STAFF_FILE = Path(__file__).parent / "nhan_su.csv"
+STAFF_FILE = find_file("nhan_su.csv")
 STAFF_COLS = ["id", "pos", "store", "status"]
 DEFAULT_ALLOWED = "bán hàng, trưởng cửa hàng, quản lý cửa hàng, trợ lý cửa hàng, aio"
 
@@ -872,13 +980,13 @@ def staff_signature():
     try:
         stt = STAFF_FILE.stat()
         return f"{stt.st_mtime_ns}-{stt.st_size}"
-    except OSError:
+    except (OSError, AttributeError):
         return "missing"
 
 
 @st.cache_data(show_spinner=False)
 def load_default_staff(sig=""):
-    if not STAFF_FILE.exists():
+    if STAFF_FILE is None or not STAFF_FILE.exists():
         return pd.DataFrame(columns=STAFF_COLS)
     return parse_staff(STAFF_FILE.read_bytes(), STAFF_FILE.name)
 
@@ -990,7 +1098,7 @@ for _pre in ("l1", "l2"):
         st.session_state[f"{_pre}_saved"] = pd.Timestamp(p.stat().st_mtime, unit="s", tz="UTC") \
             .tz_convert("Asia/Ho_Chi_Minh").strftime("%d/%m %H:%M")
 
-default_stores = load_default_stores(store_signature())
+default_stores, store_src = load_default_stores(store_signature())
 
 with st.sidebar:
     st.markdown('<div class="brand"><div class="logo">C</div><div><div class="bn">CellphoneS Audit</div>'
@@ -1047,7 +1155,8 @@ with st.sidebar:
     if staff.empty:
         staff = load_default_staff(staff_signature())
     FLAGS_OK = (not stores.empty) and bool((stores["Mystery"] == "Có").any())
-    st.markdown(chip(f"DS cửa hàng: {len(stores)} shop" if len(stores) else "⚠️ Thiếu store_master.csv",
+    st.markdown(chip(f"DS cửa hàng: {len(stores)} shop ({'file đã nạp' if u3 and stores is not default_stores else store_src})"
+                     if len(stores) else "⚠️ Thiếu danh sách cửa hàng",
                      "dark" if len(stores) else "warn"), unsafe_allow_html=True)
     st.markdown(chip(f"Danh sách nhân sự: {len(staff):,} người" if len(staff) else "⚠️ Chưa có danh sách nhân sự (nhan_su.csv)",
                      "dark" if len(staff) else "warn"), unsafe_allow_html=True)
@@ -1401,7 +1510,8 @@ def tab_validation(P, bundle, label):
                if "Sai đối tượng" in bundle["IV"].columns else "Chưa kiểm tra"),
               ("Plan chưa nhận diện được hạng mục", int(P["Hạng mục"].isin(["Trade khác", "Plus ?"]).sum())),
               ("Plan có trạng thái QC không nhận diện được", int(P["QC"].eq("UNKNOWN").sum())),
-              ("Cửa hàng có trong raw nhưng không có trong danh sách", len(set(P["store"]) - set(stores["Mã cửa hàng"])))]
+              ("Cửa hàng có trong raw nhưng không có trong danh sách (không tính CAMPUS)",
+               len([c for c in set(P["store"]) - set(stores["Mã cửa hàng"]) if (norm(CAMPUS_KW).upper() or "CAMPUS") not in c]))]
     section("Kiểm tra nguồn dữ liệu")
     show_df(pd.DataFrame(checks, columns=["Nội dung kiểm tra", "Kết quả"]).astype(str))
     section("Số plan theo nghiệp vụ, hệ thống và hạng mục", "Dùng để phát hiện hạng mục bị nhận diện sai")
@@ -1413,8 +1523,15 @@ def tab_validation(P, bundle, label):
             show_df(diff.drop_duplicates("store")[["store", "lead_raw", "Lead"]]
                     .rename(columns={"store": "Mã cửa hàng", "lead_raw": "Lead trong raw", "Lead": "Lead theo danh sách"}))
     miss = sorted(set(P["store"]) - set(stores["Mã cửa hàng"]))
-    if miss:
-        st.warning("Mã cửa hàng có trong raw nhưng chưa có trong danh sách: " + ", ".join(miss))
+    camp = [c for c in miss if (norm(CAMPUS_KW).upper() or "CAMPUS") in c]
+    other = [c for c in miss if c not in camp]
+    if camp:
+        st.info(f"{len(camp)} mã CAMPUS nằm ngoài danh sách cửa hàng (bình thường): " + ", ".join(camp))
+    if other:
+        st.warning(f"{len(other)} mã cửa hàng có trong raw nhưng chưa có trong danh sách cửa hàng "
+                   "(Lead sẽ lấy theo raw). Nếu gần như toàn bộ mã đều bị báo, danh sách cửa hàng chưa được nạp.")
+        with st.expander("Xem các mã này"):
+            st.write(", ".join(other))
 
 
 # =====================================================================
