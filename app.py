@@ -574,7 +574,11 @@ def dataframe_to_excel_bytes(df, sheet_name):
 
         for i, name in enumerate(df.columns):
             ws.write(0, i, name, header_fmt)
-            body = int(df[name].astype(str).map(len).quantile(.90)) + 2 if len(df) else 12
+            if len(df):
+                lens = df[name].astype(str).str.len().fillna(0)
+                body = int(lens.quantile(.90)) + 2
+            else:
+                body = 12
             ws.set_column(i, i, min(max(len(str(name)) + 2, body), 42))
 
         last = max(len(df), 1)
