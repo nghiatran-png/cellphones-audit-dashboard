@@ -1,10 +1,16 @@
 import base64
 import gzip
+import hashlib
+import hmac
 import html
 import io
+import json
 import math
 import numbers
 import re
+import secrets
+import threading
+import time
 import traceback
 import unicodedata
 from pathlib import Path
@@ -17,7 +23,7 @@ import streamlit as st
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
                    layout="wide", initial_sidebar_state="expanded")
 
-APP_VERSION = "4.7.1"
+APP_VERSION = "5.1.0"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -94,6 +100,8 @@ section[data-testid="stSidebar"]{background:#fff;border-right:1px solid var(--li
 .st-key-bell_alert button{background:#d92d20;color:#fff;border:2px solid #fff;animation:ring 1.6s infinite}
 .st-key-bell_alert button:hover{background:#b42318;color:#fff;border-color:#fff}
 .st-key-bell_ok button{background:#fff;color:#475467;border:1px solid var(--line)}
+section[data-testid="stSidebar"] .chip{white-space:normal;line-height:1.35}
+[data-testid="stForm"]{border:0!important;padding:0!important}
 @keyframes ring{0%,100%{box-shadow:0 0 0 0 rgba(217,45,32,.55)}50%{box-shadow:0 0 0 12px rgba(217,45,32,0)}}
 </style>
 """, unsafe_allow_html=True)
@@ -346,6 +354,7 @@ def find_file(name):
         return None
 
 
+DATA_DIR = Path(__file__).parent / "data"
 STORE_FILE = find_file("store_master.csv")
 _EMBEDDED_STORES = """
 H4sIAMeB12oC/71dW28jR3Z+z69o7EsShD3T1fd+7ItXLbDZokYtQn5kFMMkHFHCWFxEebJjBJvAMTIDJ9lsFkFGoxib8XrisWcW
@@ -1094,6 +1103,269 @@ def bell(alerts, tag):
 
 
 # =====================================================================
+# Đăng nhập và phân quyền (admin / lead / field)
+# =====================================================================
+USERS_FILE = find_file("users.csv")
+USERS_LIVE = DATA_DIR / "users_live.csv"  # bản chỉnh sửa của Admin trên máy chủ (ưu tiên hơn users.csv)
+PBKDF2_ITER = 200_000
+ROLE_LABEL = {"admin": "Quản trị", "lead": "Lead", "field": "Field"}
+USER_COLS = ["email", "role", "display_name", "lead", "field_names", "salt", "hash", "key"]
+
+
+def hash_pw(pw, salt_hex):
+    return hashlib.pbkdf2_hmac("sha256", str(pw).encode(), bytes.fromhex(salt_hex), PBKDF2_ITER).hex()
+
+
+def users_source():
+    return USERS_LIVE if USERS_LIVE.exists() else USERS_FILE
+
+
+def users_signature():
+    try:
+        p = users_source()
+        stt = p.stat()
+        return f"{p.name}-{stt.st_mtime_ns}-{stt.st_size}"
+    except (OSError, AttributeError):
+        return "missing"
+
+
+@st.cache_data(show_spinner=False)
+def load_users(sig=""):
+    p = users_source()
+    if p is None or not p.exists():
+        return pd.DataFrame(columns=USER_COLS)
+    d = pd.read_csv(p, dtype=str).fillna("")
+    d["key"] = d["email"].str.strip().str.lower()
+    return d
+
+
+@st.cache_resource
+def _login_fails():
+    return {}
+
+
+def verify_login(email, pw):
+    """Trả về (user, thông báo lỗi). Khóa 15 phút sau 5 lần sai; so sánh hằng thời gian."""
+    users = load_users(users_signature())
+    key = str(email).strip().lower()
+    fails = _login_fails()
+    n, ts = fails.get(key, (0, 0.0))
+    if n >= 5 and time.time() - ts < 900:
+        return None, "Tài khoản tạm khóa 15 phút do nhập sai nhiều lần."
+    row = users[users["key"] == key]
+    found = len(row) > 0
+    salt = row.iloc[0]["salt"] if found else "00" * 16
+    expect = row.iloc[0]["hash"] if found else "0" * 64
+    ok = hmac.compare_digest(hash_pw(pw, salt), expect) and found
+    if ok:
+        fails.pop(key, None)
+        r = row.iloc[0]
+        return {k: r[k] for k in ("email", "role", "display_name", "lead", "field_names")}, ""
+    if len(fails) > 2000:
+        fails.clear()
+    fails[key] = ((n + 1) if time.time() - ts < 900 else 1, time.time())
+    return None, "Sai tài khoản hoặc mật khẩu."
+
+
+def login_screen():
+    st.markdown('<div class="brand" style="justify-content:center;margin-top:60px"><div class="logo">C</div><div>'
+                '<div class="bn">CellphoneS Audit</div><div class="bs">Đăng nhập để xem dashboard</div></div></div>',
+                unsafe_allow_html=True)
+    _, mid, _ = st.columns([1, 1.1, 1])
+    with mid:
+        with st.container(border=True):
+            with st.form("login_form"):
+                email = st.text_input("Email / tên đăng nhập", key="login_email")
+                pw = st.text_input("Mật khẩu", type="password", key="login_pw")
+                go = st.form_submit_button("Đăng nhập", type="primary")
+            if go:
+                user, msg = verify_login(email, pw)
+                if user:
+                    st.session_state["user"] = user
+                    st.rerun()
+                st.error(msg)
+        st.caption("Chưa có tài khoản hoặc quên mật khẩu: liên hệ quản trị dashboard.")
+
+
+AUTH_ON = users_source() is not None
+if AUTH_ON:
+    USER = st.session_state.get("user")
+    if not USER:
+        login_screen()
+        st.stop()
+    _u = load_users(users_signature())
+    _r = _u[_u["key"] == str(USER["email"]).strip().lower()]
+    if _r.empty:  # tài khoản đã bị xóa -> buộc đăng xuất
+        st.session_state.pop("user", None)
+        st.rerun()
+    USER = {k: _r.iloc[0][k] for k in ("email", "role", "display_name", "lead", "field_names")}  # cập nhật theo chỉnh sửa mới nhất
+    st.session_state["user"] = USER
+else:  # chưa có users.csv -> chạy chế độ mở như trước (có cảnh báo)
+    USER = {"email": "", "role": "admin", "display_name": "Chưa bật đăng nhập", "lead": "", "field_names": ""}
+ROLE = USER["role"]
+IS_ADMIN = ROLE == "admin"
+MY_LEAD = USER.get("lead", "") if ROLE == "lead" else ""
+MY_NAMES = {norm(n) for n in (str(USER.get("field_names", "")).split("|") + [USER.get("display_name", "")]) if norm(n)}
+if ROLE == "lead" and not MY_LEAD:
+    st.error("Tài khoản Lead chưa được gán tên Lead. Liên hệ quản trị.")
+    st.stop()
+
+# =====================================================================
+# Yêu cầu bổ sung (Lead -> nhân sự Field). Lưu trong data/requests.json trên máy chủ.
+# =====================================================================
+REQ_FILE = DATA_DIR / "requests.json"
+
+
+@st.cache_resource
+def _req_lock():
+    return threading.Lock()
+
+
+def now_str():
+    return pd.Timestamp.now(tz="Asia/Ho_Chi_Minh").strftime("%d/%m %H:%M")
+
+
+def load_requests():
+    try:
+        return json.loads(REQ_FILE.read_text("utf-8")) if REQ_FILE.exists() else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _save_requests(items):
+    DATA_DIR.mkdir(exist_ok=True)
+    tmp = REQ_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=1), "utf-8")
+    tmp.replace(REQ_FILE)
+
+
+def add_requests(new_items):
+    """Thêm yêu cầu; bỏ qua plan đang có yêu cầu 'Mở'. Trả về (số đã thêm, số bỏ qua)."""
+    with _req_lock():
+        items = load_requests()
+        open_plans = {r["plan"] for r in items if r.get("status") == "Mở"}
+        added = skipped = 0
+        for it in new_items:
+            if it["plan"] in open_plans:
+                skipped += 1
+                continue
+            it["id"] = f"r{int(time.time() * 1000)}{secrets.token_hex(2)}"
+            items.append(it)
+            open_plans.add(it["plan"])
+            added += 1
+        _save_requests(items)
+    return added, skipped
+
+
+def update_request(rid, **fields):
+    with _req_lock():
+        items = load_requests()
+        for r in items:
+            if r.get("id") == rid:
+                r.update(fields)
+        _save_requests(items)
+
+
+def name_email_map():
+    m = {}
+    for _, r in load_users(users_signature()).iterrows():
+        for n in str(r["field_names"]).split("|"):
+            if norm(n):
+                m.setdefault(norm(n), r["email"])
+    return m
+
+
+VALID_ROLES = ("admin", "lead", "field")
+PW_ALPHABET = "abcdefghjkmnpqrstuvwxyzACDEFGHJKLMNPQRTUVWXYZ2346789"
+
+
+def gen_password(n=10):
+    return "".join(secrets.choice(PW_ALPHABET) for _ in range(n))
+
+
+def _clean(v):
+    return "" if pd.isna(v) else str(v).strip()
+
+
+def apply_user_edits(orig, edited, me_id, known_leads):
+    """Áp dụng bảng chỉnh sửa tài khoản. Giữ nguyên mật khẩu (salt/hash) của tài khoản cũ, cấp mật khẩu mới cho dòng mới.
+    Trả về (bảng users mới | None, danh sách mật khẩu mới, danh sách lỗi)."""
+    orig = orig.reset_index(drop=True)
+    errors, rows, new_pw, seen, used = [], [], [], {}, {}
+    for pos, r in edited.reset_index(drop=True).iterrows():
+        email, role, name, lead, names = (_clean(r.get(c)) for c in ("email", "role", "display_name", "lead", "field_names"))
+        if not any([email, role, name, lead, names]):
+            continue
+        line = f"Dòng {pos + 1}"
+        key = email.lower()
+        if not email or " " in email:
+            errors.append(f"{line}: tài khoản trống hoặc có khoảng trắng.")
+            continue
+        if key in seen:
+            errors.append(f"{line}: tài khoản '{email}' bị trùng với dòng {seen[key] + 1}.")
+            continue
+        seen[key] = pos
+        if role not in VALID_ROLES:
+            errors.append(f"{line} ({email}): vai trò phải là admin, lead hoặc field.")
+            continue
+        if role == "lead" and lead not in known_leads:
+            errors.append(f"{line} ({email}): vai trò Lead cần chọn đúng tên Lead ({', '.join(known_leads)}).")
+            continue
+        oid = r.get("_id")
+        base = None
+        if pd.notna(oid) and int(oid) in range(len(orig)) and int(oid) not in used:
+            base = orig.loc[int(oid)]
+            used[int(oid)] = role
+        if base is not None:
+            salt, hh = base["salt"], base["hash"]
+        else:
+            pw = gen_password()
+            salt = secrets.token_hex(16)
+            hh = hash_pw(pw, salt)
+            new_pw.append({"Tài khoản": email, "Vai trò": role, "Tên": name or email, "Lead": lead, "Mật khẩu ban đầu": pw})
+        rows.append({"email": email, "role": role, "display_name": name or email, "lead": lead,
+                     "field_names": names, "salt": salt, "hash": hh})
+    if not any(x["role"] == "admin" for x in rows):
+        errors.append("Phải còn ít nhất một tài khoản Quản trị (admin).")
+    if me_id is not None:
+        if me_id not in used:
+            errors.append("Không thể xóa tài khoản đang đăng nhập.")
+        elif used[me_id] != "admin":
+            errors.append("Không thể tự hạ quyền Quản trị của chính mình.")
+    return (None if errors else pd.DataFrame(rows)), new_pw, errors
+
+
+def reset_passwords(users, keys):
+    u = users.reset_index(drop=True).copy()
+    out = []
+    for i, r in u.iterrows():
+        if r["email"].strip().lower() in keys:
+            pw = gen_password()
+            salt = secrets.token_hex(16)
+            u.loc[i, "salt"], u.loc[i, "hash"] = salt, hash_pw(pw, salt)
+            out.append({"Tài khoản": r["email"], "Vai trò": r["role"], "Tên": r["display_name"], "Lead": r["lead"],
+                        "Mật khẩu ban đầu": pw})
+    return u, out
+
+
+USER_SAVE_COLS = ["email", "role", "display_name", "lead", "field_names", "salt", "hash"]
+
+
+def save_users(df):
+    with _req_lock():
+        DATA_DIR.mkdir(exist_ok=True)
+        tmp = USERS_LIVE.with_suffix(".tmp")
+        df[USER_SAVE_COLS].to_csv(tmp, index=False, encoding="utf-8")
+        tmp.replace(USERS_LIVE)
+
+
+def pw_xlsx_bytes(rows):
+    buf = io.BytesIO()
+    pd.DataFrame(rows).to_excel(buf, index=False)
+    return buf.getvalue()
+
+
+# =====================================================================
 # Sidebar
 # =====================================================================
 DATA_DIR = Path(__file__).parent / "data"
@@ -1134,11 +1406,20 @@ default_stores, store_src = load_default_stores(store_signature())
 with st.sidebar:
     st.markdown('<div class="brand"><div class="logo">C</div><div><div class="bn">CellphoneS Audit</div>'
                 '<div class="bs">Màn hình điều hành</div></div></div>', unsafe_allow_html=True)
+    if AUTH_ON:
+        st.markdown('<div class="sbt">Tài khoản</div>', unsafe_allow_html=True)
+        st.markdown(chip(f"👤 {USER.get('display_name') or USER['email']} · {ROLE_LABEL[ROLE]}", "ok"), unsafe_allow_html=True)
+        if st.button("Đăng xuất", key="logout"):
+            st.session_state.pop("user", None)
+            st.rerun()
+    else:
+        st.markdown(chip("⚠️ Chưa bật đăng nhập (thiếu users.csv)", "warn"), unsafe_allow_html=True)
     st.markdown('<div class="sbt">Chế độ xem</div>', unsafe_allow_html=True)
-    view = st.radio("Chế độ", ["📌 LẦN 1", "📌 LẦN 2", "📊 CEO VIEW"], index=0, label_visibility="collapsed")
+    view = st.radio("Chế độ", ["📌 LẦN 1", "📌 LẦN 2"] + (["📊 CEO VIEW"] if IS_ADMIN else []), index=0,
+                    label_visibility="collapsed")
     st.markdown('<div class="sbt">Dữ liệu</div>', unsafe_allow_html=True)
     for lbl, pre in [("Raw Data Lần 1", "l1"), ("Raw Data Lần 2", "l2")]:
-        up = st.file_uploader(lbl, type=["xlsx", "xls"], key=f"up_{pre}")
+        up = st.file_uploader(lbl, type=["xlsx", "xls"], key=f"up_{pre}") if IS_ADMIN else None
         if up:
             data = up.getvalue()
             if data != st.session_state[f"{pre}_bytes"]:
@@ -1152,17 +1433,25 @@ with st.sidebar:
     st.markdown('<div class="sbt">Bộ lọc</div>', unsafe_allow_html=True)
     stores_all = default_stores
     leaders = sorted(set(stores_all["Lead"]) - {""}) if not stores_all.empty else []
-    selected_leader = st.selectbox("Lead", ["Tất cả"] + leaders)
+    if ROLE == "lead":
+        selected_leader = MY_LEAD
+        st.markdown(chip(f"Lead: {MY_LEAD}", "dark"), unsafe_allow_html=True)
+    elif ROLE == "field":
+        selected_leader = "Tất cả"
+    else:
+        selected_leader = st.selectbox("Lead", ["Tất cả"] + leaders)
     search = st.text_input("Tìm cửa hàng / NV / MSNV", "")
-    with st.expander("⚙️ Thiết lập"):
-        THR = st.slider("Ngưỡng điểm trả bài (%)", 50, 100, 80, 5)
-        DEFAULT_MAX = st.number_input("Điểm tối đa (khi raw thiếu 'Thang điểm')", 1, 1000, 100)
-        ALLOWED_KW = st.text_input("Vị trí được phép phỏng vấn Plus (từ khóa, cách nhau bằng dấu phẩy)", DEFAULT_ALLOWED,
-                                   help="Bài Plus của MSNV có vị trí không chứa từ khóa nào ở đây sẽ bị báo SAI ĐỐI TƯỢNG.")
-        u4 = st.file_uploader("Danh sách nhân sự mới (Excel/CSV)", type=["xlsx", "xls", "csv"], key="up_staff")
-        CAMPUS_KW = st.text_input("Từ khóa nhận diện CAMPUS", "CAMPUS",
-                                  help="App xếp plan vào CAMPUS khi từ khóa này có trong Mã cửa hàng, Hệ thống hoặc Tên plan.")
-        u3 = st.file_uploader("DS cửa hàng thay thế (CSV/Excel)", type=["csv", "xlsx", "xls"], key="up_store")
+    THR, DEFAULT_MAX, ALLOWED_KW, CAMPUS_KW, u3, u4 = 80, 100, DEFAULT_ALLOWED, "CAMPUS", None, None
+    if IS_ADMIN:
+        with st.expander("⚙️ Thiết lập"):
+            THR = st.slider("Ngưỡng điểm trả bài (%)", 50, 100, 80, 5)
+            DEFAULT_MAX = st.number_input("Điểm tối đa (khi raw thiếu 'Thang điểm')", 1, 1000, 100)
+            ALLOWED_KW = st.text_input("Vị trí được phép phỏng vấn Plus (từ khóa, cách nhau bằng dấu phẩy)", DEFAULT_ALLOWED,
+                                       help="Bài Plus của MSNV có vị trí không chứa từ khóa nào ở đây sẽ bị báo SAI ĐỐI TƯỢNG.")
+            u4 = st.file_uploader("Danh sách nhân sự mới (Excel/CSV)", type=["xlsx", "xls", "csv"], key="up_staff")
+            CAMPUS_KW = st.text_input("Từ khóa nhận diện CAMPUS", "CAMPUS",
+                                      help="App xếp plan vào CAMPUS khi từ khóa này có trong Mã cửa hàng, Hệ thống hoặc Tên plan.")
+            u3 = st.file_uploader("DS cửa hàng thay thế (CSV/Excel)", type=["csv", "xlsx", "xls"], key="up_store")
     stores = default_stores
     if u3:
         parsed = parse_store_master(u3.getvalue(), u3.name)
@@ -1202,6 +1491,8 @@ if view != "📊 CEO VIEW":
     _chips.append(chip(f"📄 {_nm}" + (f" · {_when}" if _when else "") if _nm else "Chưa nạp dữ liệu", ""))
 if selected_leader != "Tất cả":
     _chips.append(chip(f"Lead: {selected_leader}", ""))
+if AUTH_ON:
+    _chips.append(chip(f"👤 {USER.get('display_name') or USER['email']} · {ROLE_LABEL[ROLE]}", ""))
 _chips.append(chip(f"v{APP_VERSION}", ""))
 st.markdown(
     f'<div class="hero"><div><div class="hero-title">CellphoneS Audit Control Tower</div>'
@@ -1248,8 +1539,8 @@ def tab_overview(P, cps_m, dtv_m, my_m, ls, label, n_alert=0):
     pdn, pt = int(plus["Hoàn thành"].sum()), len(plus)
     cards = [
         kpi_card("CPS – đủ 4 hạng mục", f"{cd}/{ct}", "cửa hàng đã hoàn thành", pct(cd, ct)),
-        kpi_card("DTV – đủ hạng mục", f"{dd}/{dt}", "cửa hàng đã hoàn thành", pct(dd, dt)) if label == "Lần 1"
-        else kpi_card("DTV", "—", "Lần 2 không áp dụng"),
+        kpi_card("DTV – đủ hạng mục", f"{dd}/{dt}", "cửa hàng đã hoàn thành", pct(dd, dt)) if (label == "Lần 1" and dt)
+        else kpi_card("DTV", "—", "Lần 2 không áp dụng" if label == "Lần 2" else "Không có cửa hàng DTV"),
         kpi_card("Plus – plan hoàn thành", f"{pdn}/{pt}", "Field và QC đều đã xong", pct(pdn, pt)),
         kpi_card("Mystery – cửa hàng hoàn tất", f"{md}/{mt}", "trên tổng số cửa hàng được giao", pct(md, mt)),
         kpi_card("Plan bị từ chối", int(P["Bị từ chối"].sum()), "cần chấm lại / bổ sung", None, bad=True),
@@ -1609,15 +1900,299 @@ def tab_validation(P, bundle, label):
             st.write(", ".join(other))
 
 
+def editor(df, **kw):
+    try:
+        return st.data_editor(df, hide_index=True, **STRETCH, **kw)
+    except Exception:  # noqa: BLE001  (phiên bản Streamlit cũ không nhận width)
+        return st.data_editor(df, hide_index=True, **kw)
+
+
+def tab_field_staff(P):
+    t = text_filter(lead_filter(P), ["Field name", "Tên Plan", "store"], search)
+    users = load_users(users_signature())
+    acct = name_email_map() if AUTH_ON else {}
+    reqs = load_requests()
+    open_by = pd.Series([norm(r.get("to_name", "")) for r in reqs if r.get("status") == "Mở"], dtype=str).value_counts().to_dict()
+    t = t.assign(_n=t["Field name"].fillna("").astype(str).str.strip().replace("", "(chưa gán)"))
+    g = t.groupby("_n").agg(**{
+        "Tổng plan": ("Tên Plan", "size"), "Hoàn thành": ("Hoàn thành", "sum"),
+        "Chờ QC": ("_st", lambda s: int((s == "WAIT_QC").sum())), "Bị từ chối": ("Bị từ chối", "sum"),
+        "Chưa Field xong": ("_st", lambda s: int((s == "NOT_FIELD").sum()))}).reset_index().rename(columns={"_n": "Nhân sự Field"})
+    scope_lead = MY_LEAD or (selected_leader if selected_leader != "Tất cả" else "")
+    if AUTH_ON and not users.empty:  # thêm tài khoản Field thuộc Lead nhưng chưa có plan nào
+        mine = users[(users["role"] == "field") & ((users["lead"] == scope_lead) if scope_lead else True)]
+        have = {norm(x) for x in g["Nhân sự Field"]}
+        extra = [{"Nhân sự Field": r["display_name"], "Tổng plan": 0, "Hoàn thành": 0, "Chờ QC": 0, "Bị từ chối": 0,
+                  "Chưa Field xong": 0} for _, r in mine.iterrows() if norm(r["display_name"]) not in have]
+        if extra:
+            g = pd.concat([g, pd.DataFrame(extra).drop_duplicates("Nhân sự Field")], ignore_index=True)
+    if g.empty:
+        st.info("Chưa có nhân sự Field nào để hiển thị.")
+        return
+    g["% hoàn thành"] = [pct(a, b) if b else np.nan for a, b in zip(g["Hoàn thành"], g["Tổng plan"])]
+    g["Yêu cầu đang mở"] = g["Nhân sự Field"].apply(lambda n: int(open_by.get(norm(n), 0)))
+    g["Tài khoản"] = g["Nhân sự Field"].apply(lambda n: acct.get(norm(n), "—"))
+    g = g.sort_values(["Tổng plan", "Nhân sự Field"], ascending=[False, True]).reset_index(drop=True)
+    c = st.columns(4)
+    c[0].metric("Nhân sự Field", len(g))
+    c[1].metric("Đang có plan", int((g["Tổng plan"] > 0).sum()))
+    c[2].metric("Plan hoàn thành", int(g["Hoàn thành"].sum()))
+    c[3].metric("Plan bị từ chối", int(g["Bị từ chối"].sum()))
+    top = g[g["Tổng plan"] > 0].head(25)
+    if not top.empty:
+        long = top.melt(id_vars="Nhân sự Field", value_vars=["Hoàn thành", "Chờ QC", "Bị từ chối", "Chưa Field xong"],
+                        var_name="Tình trạng", value_name="Số plan")
+        fig = px.bar(long, x="Nhân sự Field", y="Số plan", color="Tình trạng", barmode="stack", text_auto=True,
+                     title="Kết quả audit từng nhân sự Field",
+                     color_discrete_map={"Hoàn thành": "#12b76a", "Chờ QC": "#f79009", "Bị từ chối": "#f04438",
+                                         "Chưa Field xong": "#98a2b3"})
+        show_chart(fig)
+    section("Bảng kết quả từng nhân sự Field", "Chọn một người ở bên dưới để xem chi tiết plan của họ")
+    show_df(g, height=420, column_config=PCT_CFG(["% hoàn thành"]))
+    pick = st.selectbox("Xem chi tiết plan của", ["—"] + g["Nhân sự Field"].tolist(), key="staff_pick")
+    if pick != "—":
+        d = t[t["_n"] == pick]
+        show_df(pd.DataFrame({"Nghiệp vụ": d["Nghiệp vụ"], "Mã cửa hàng": d["store"], "Hạng mục": d["Hạng mục"],
+                              "Tên plan": d["Tên Plan"], "Tình trạng": d["_st"].map(STATUS_LABEL),
+                              "Lý do / ghi chú QC": d["Ghi chú QC"]}), height=320)
+
+
+REQ_KINDS = {"Bị từ chối / yêu cầu bổ sung": "REJ", "Đã Field xong – chờ QC duyệt": "WAIT_QC",
+             "Chưa Field xong": "NOT_FIELD", "Tất cả plan chưa hoàn thành": "ALL"}
+
+
+def tab_requests(P):
+    section("Gửi yêu cầu bổ sung cho nhân sự Field", "Chọn plan rồi gửi: nhân sự Field sẽ thấy yêu cầu trong màn hình của họ")
+    kind = REQ_KINDS[st.selectbox("Loại plan", list(REQ_KINDS), key="req_kind")]
+    base = lead_filter(P)
+    mask = {"REJ": base["Bị từ chối"], "WAIT_QC": base["_st"].eq("WAIT_QC"), "NOT_FIELD": base["_st"].eq("NOT_FIELD"),
+            "ALL": ~base["Hoàn thành"]}[kind]
+    cand = text_filter(base[mask], ["store", "Tên Plan", "Field name"], search).reset_index(drop=True)
+    if cand.empty:
+        st.success("Không có plan nào thuộc loại này.")
+    else:
+        tbl = pd.DataFrame({"Chọn": False, "Mã cửa hàng": cand["store"], "Nghiệp vụ": cand["Nghiệp vụ"], "Hạng mục": cand["Hạng mục"],
+                            "Tên plan": cand["Tên Plan"], "Người thực hiện": cand["Field name"].fillna(""),
+                            "Tình trạng": cand["_st"].map(STATUS_LABEL),
+                            "Lý do QC": cand["Ghi chú QC"].replace("", "Chưa có ghi chú QC")})
+        ed = editor(tbl, disabled=[c for c in tbl.columns if c != "Chọn"], height=380, key=f"req_editor_{kind}",
+                    column_config={"Chọn": st.column_config.CheckboxColumn("Chọn", default=False)})
+        msg = st.text_area("Nội dung yêu cầu", "Vui lòng bổ sung / chấm lại plan này theo ghi chú QC và cập nhật lại sớm.",
+                           key="req_msg")
+        n_sel = int(ed["Chọn"].sum())
+        if st.button(f"📨 Gửi yêu cầu cho {n_sel} plan đã chọn", disabled=n_sel == 0, type="primary", key="req_send"):
+            e2m = name_email_map() if AUTH_ON else {}
+            new, no_owner = [], 0
+            for i in ed.index[ed["Chọn"]]:
+                r = cand.loc[i]
+                nm = str(r["Field name"] or "").strip()
+                if not nm:
+                    no_owner += 1
+                    continue
+                new.append({"created": now_str(), "plan": r["Tên Plan"], "store": r["store"], "item": r["Hạng mục"],
+                            "kind": r["Nghiệp vụ"], "reason": r["Ghi chú QC"], "to_name": nm, "to_email": e2m.get(norm(nm), ""),
+                            "from_email": USER["email"], "from_lead": r["Lead"], "message": msg, "status": "Mở",
+                            "done_at": "", "field_reply": ""})
+            a, s_ = add_requests(new) if new else (0, 0)
+            if a:
+                st.success(f"Đã gửi {a} yêu cầu." + (f" Bỏ qua {s_} plan đang có yêu cầu mở." if s_ else ""))
+            if s_ and not a:
+                st.info(f"Bỏ qua {s_} plan vì đang có yêu cầu mở.")
+            if no_owner:
+                st.warning(f"{no_owner} plan chưa có người thực hiện trong dữ liệu nên chưa gửi được.")
+    section("Yêu cầu đã gửi", "Trạng thái: Mở → Đã bổ sung (nhân sự Field bấm) → Đã đóng (Lead xác nhận)")
+    items = [r for r in load_requests() if IS_ADMIN or r.get("from_lead") == MY_LEAD]
+    if selected_leader != "Tất cả" and IS_ADMIN:
+        items = [r for r in items if r.get("from_lead") == selected_leader]
+    if not items:
+        st.info("Chưa có yêu cầu nào.")
+        return
+    df = pd.DataFrame(items)
+    c = st.columns(3)
+    c[0].metric("Đang mở", int((df["status"] == "Mở").sum()))
+    c[1].metric("Đã bổ sung – chờ xác nhận", int((df["status"] == "Đã bổ sung").sum()))
+    c[2].metric("Đã đóng", int((df["status"] == "Đã đóng").sum()))
+    view = df[["id", "created", "status", "store", "kind", "item", "to_name", "message", "field_reply", "done_at", "plan"]].rename(columns={
+        "id": "Mã YC", "created": "Gửi lúc", "status": "Trạng thái", "store": "Mã cửa hàng", "kind": "Nghiệp vụ", "item": "Hạng mục",
+        "to_name": "Gửi cho", "message": "Nội dung", "field_reply": "Phản hồi của Field", "done_at": "Bổ sung lúc", "plan": "Tên plan"})
+    show_df(view.iloc[::-1], height=360)
+    open_ids = df[df["status"] != "Đã đóng"]["id"].tolist()
+    close = st.multiselect("Đóng yêu cầu (đã nhận đủ bổ sung)", open_ids, key="req_close")
+    if st.button("Đóng các yêu cầu đã chọn", disabled=not close, key="req_close_btn"):
+        for rid in close:
+            update_request(rid, status="Đã đóng")
+        st.rerun()
+
+
+def field_home(P, IV, label):
+    me = USER.get("display_name") or USER["email"]
+    if P.empty:
+        st.info(f"Chưa có plan nào được giao cho {me} trong đợt {label}. Nếu bạn nghĩ đây là nhầm lẫn, báo Lead hoặc quản trị.")
+        return
+    tot, done = len(P), int(P["Hoàn thành"].sum())
+    wait, rej, notf = int((P["_st"] == "WAIT_QC").sum()), int(P["Bị từ chối"].sum()), int((P["_st"] == "NOT_FIELD").sum())
+    cards = [kpi_card("Plan được giao", tot, f"đợt {label}"),
+             kpi_card("Đã hoàn thành", f"{done}/{tot}", "Field và QC đều xong", pct(done, tot)),
+             kpi_card("Chờ QC duyệt", wait, "bạn đã làm xong, chờ QC"),
+             kpi_card("Cần bổ sung", rej, "bị từ chối / yêu cầu bổ sung", None, bad=True),
+             kpi_card("Chưa làm xong", notf, "plan chưa hoàn thành phần Field")]
+    st.markdown('<div class="kpi-row">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+    t1, t2, t3 = st.tabs(["🔔 Việc cần xử lý", "📋 Tất cả plan của tôi", "🎤 Kết quả Plus của tôi"])
+    with t1:
+        mine = [r for r in load_requests() if r.get("status") in ("Mở", "Đã bổ sung")
+                and (str(r.get("to_email", "")).lower() == USER["email"].lower() or norm(r.get("to_name", "")) in MY_NAMES)]
+        section("Yêu cầu bổ sung từ Lead", f"{sum(r['status'] == 'Mở' for r in mine)} yêu cầu đang chờ bạn")
+        if not mine:
+            st.success("Không có yêu cầu nào từ Lead.")
+        for r in mine:
+            with st.container(border=True):
+                st.markdown(f"**{r['store']} · {r['kind']} · {r['item']}**  \n`{r['plan']}`")
+                st.caption(f"Gửi lúc {r['created']} · Lead: {r['from_lead']}")
+                st.write(r["message"])
+                if r.get("reason"):
+                    st.warning(f"Ghi chú QC: {r['reason']}")
+                if r["status"] == "Mở":
+                    reply = st.text_input("Phản hồi (không bắt buộc)", key=f"fr_{r['id']}")
+                    if st.button("✅ Tôi đã bổ sung xong", key=f"fd_{r['id']}", type="primary"):
+                        update_request(r["id"], status="Đã bổ sung", done_at=now_str(), field_reply=reply)
+                        st.rerun()
+                else:
+                    st.success(f"Bạn đã báo bổ sung lúc {r['done_at']} – chờ Lead xác nhận.")
+        section("Plan bị từ chối / cần làm lại")
+        d = P[P["Bị từ chối"]]
+        if d.empty:
+            st.success("Không có plan nào bị từ chối.")
+        else:
+            show_df(pd.DataFrame({"Mã cửa hàng": d["store"], "Hạng mục": d["Hạng mục"], "Tên plan": d["Tên Plan"],
+                                  "Lý do": d["Ghi chú QC"].replace("", "Chưa có ghi chú QC")}), height=260,
+                    column_config={"Lý do": st.column_config.TextColumn(width="large")})
+        section("Plan chưa làm xong")
+        d = P[P["_st"] == "NOT_FIELD"]
+        if d.empty:
+            st.success("Bạn không còn plan nào chưa làm.")
+        else:
+            show_df(pd.DataFrame({"Mã cửa hàng": d["store"], "Nghiệp vụ": d["Nghiệp vụ"], "Hạng mục": d["Hạng mục"],
+                                  "Tên plan": d["Tên Plan"]}), height=260)
+    with t2:
+        f1, f2 = st.columns(2)
+        sel_st = f1.multiselect("Tình trạng", list(STATUS_LABEL.values()), default=[], key="fld_status")
+        sel_kind = f2.multiselect("Nghiệp vụ", sorted(P["Nghiệp vụ"].unique()), default=[], key="fld_kind")
+        d = P
+        if sel_st:
+            d = d[d["_st"].map(STATUS_LABEL).isin(sel_st)]
+        if sel_kind:
+            d = d[d["Nghiệp vụ"].isin(sel_kind)]
+        d = text_filter(d, ["store", "Tên Plan"], search)
+        show_df(pd.DataFrame({"Nghiệp vụ": d["Nghiệp vụ"], "Mã cửa hàng": d["store"], "Hạng mục": d["Hạng mục"],
+                              "Tên plan": d["Tên Plan"], "Tình trạng": d["_st"].map(STATUS_LABEL),
+                              "Ghi chú QC": d["Ghi chú QC"]}), height=480)
+    with t3:
+        if IV is None or IV.empty:
+            st.info("Bạn chưa có bài phỏng vấn Plus nào được chấm.")
+        else:
+            d = IV.copy()
+            d["Kết luận"] = d["pct"].apply(lambda v: eval_pct(v, THR))
+            show_df(pd.DataFrame({"Nhân viên được phỏng vấn": d["employee_name"], "MSNV": d["employee_id"],
+                                  "Mã cửa hàng": d["store_code"], "Plus": d["plus_item"], "Điểm": d["score"],
+                                  "Điểm tối đa": d["max_score"], "% điểm": d["pct"], "Kết luận": d["Kết luận"]}).sort_values("% điểm"),
+                    height=420, column_config={"% điểm": st.column_config.NumberColumn(format="%.1f%%")})
+
+
+def tab_accounts(P):
+    users = load_users(users_signature())
+    if users.empty:
+        st.warning("Chưa có file users.csv nên chưa bật đăng nhập: bất kỳ ai có link đều thấy toàn bộ dữ liệu.")
+        return
+    live = USERS_LIVE.exists()
+    st.info("Đang dùng bản chỉnh sửa lưu trên máy chủ." if live else
+            "Đang dùng file users.csv trên GitHub. Khi bạn bấm Lưu, thay đổi được lưu trên máy chủ và có hiệu lực ngay.")
+    st.warning("Bản chỉnh sửa lưu trên máy chủ sẽ mất khi app khởi động lại. Sau khi sửa xong, bấm **Tải users.csv** "
+               "bên dưới và upload lên GitHub (ghi đè users.csv) để giữ lâu dài.")
+    msg = st.session_state.pop("acct_msg", None)
+    if msg:
+        st.success(msg)
+    pws = st.session_state.get("acct_pw")
+    if pws:
+        section("Mật khẩu ban đầu (chỉ hiện một lần)", "Gửi riêng cho từng người; tải về ngay vì sẽ không xem lại được")
+        show_df(pd.DataFrame(pws))
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.download_button("📥 Tải danh sách mật khẩu (Excel)", data=pw_xlsx_bytes(pws), key="acct_pw_dl",
+                               file_name="mat_khau_moi.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        with c2:
+            if st.button("Đã lưu, ẩn danh sách này", key="acct_pw_hide"):
+                st.session_state.pop("acct_pw", None)
+                st.rerun()
+
+    base = users.reset_index(drop=True)[["email", "role", "display_name", "lead", "field_names"]].copy()
+    base.insert(0, "_id", range(len(base)))
+    known_leads = sorted(set(stores["Lead"]) - {""}) if not stores.empty else []
+    section("Chỉnh sửa tài khoản", "Sửa trực tiếp trong bảng. Thêm dòng mới ở cuối bảng; chọn dòng rồi nhấn Delete để xóa tài khoản.")
+    ed = editor(base, num_rows="dynamic", height=430, key="acct_editor", column_config={
+        "_id": None,
+        "email": st.column_config.TextColumn("Tài khoản (email)", required=True),
+        "role": st.column_config.SelectboxColumn("Vai trò", options=list(VALID_ROLES), required=True),
+        "display_name": st.column_config.TextColumn("Tên nhân viên / tên hiển thị"),
+        "lead": st.column_config.SelectboxColumn("Lead", options=[""] + known_leads),
+        "field_names": st.column_config.TextColumn("Tên người thực hiện trong plan (nhiều tên cách nhau bằng |)", width="large")})
+    me_key = USER["email"].strip().lower()
+    me_rows = users.reset_index(drop=True).index[users.reset_index(drop=True)["key"] == me_key].tolist()
+    me_id = int(me_rows[0]) if me_rows else None
+    b1, b2 = st.columns([1, 3])
+    with b1:
+        save = st.button("💾 Lưu thay đổi", type="primary", key="acct_save")
+    with b2:
+        st.download_button("📥 Tải users.csv hiện tại (để cập nhật GitHub)", key="acct_csv_dl", file_name="users.csv",
+                           data=users[USER_SAVE_COLS].to_csv(index=False).encode("utf-8"), mime="text/csv")
+    if save:
+        new, new_pw, errs = apply_user_edits(users, ed, me_id, known_leads)
+        if errs:
+            for e in errs:
+                st.error(e)
+        else:
+            save_users(new)
+            st.session_state["acct_pw"] = new_pw or None
+            st.session_state["acct_msg"] = f"Đã lưu {len(new)} tài khoản." + (f" Đã cấp mật khẩu cho {len(new_pw)} tài khoản mới." if new_pw else "")
+            if not new_pw:
+                st.session_state.pop("acct_pw", None)
+            st.rerun()
+
+    section("Đặt lại mật khẩu", "Dùng khi nhân viên quên mật khẩu: tạo mật khẩu mới ngẫu nhiên, mật khẩu cũ mất hiệu lực")
+    pick = st.multiselect("Chọn tài khoản", users["email"].tolist(), key="acct_reset_pick")
+    if st.button("🔑 Đặt lại mật khẩu cho tài khoản đã chọn", disabled=not pick, key="acct_reset_btn"):
+        newdf, out = reset_passwords(users, {p.strip().lower() for p in pick})
+        save_users(newdf)
+        st.session_state["acct_pw"] = out
+        st.session_state["acct_msg"] = f"Đã đặt lại mật khẩu cho {len(out)} tài khoản."
+        st.rerun()
+
+    cnt = P["Field name"].fillna("").apply(norm).value_counts().to_dict()
+    show = users.assign(**{"Số tên Field": users["field_names"].apply(lambda s: len([x for x in str(s).split("|") if x.strip()])),
+                           "Số plan (đợt này)": users["field_names"].apply(
+                               lambda s: int(sum(cnt.get(norm(x), 0) for x in str(s).split("|")) if str(s).strip() else 0))})
+    section("Thống kê tài khoản", "Mật khẩu không hiển thị (chỉ lưu dạng băm)")
+    show_df(show[["email", "role", "display_name", "lead", "Số tên Field", "Số plan (đợt này)"]].rename(columns={
+        "email": "Tài khoản", "role": "Vai trò", "display_name": "Tên", "lead": "Lead"}), height=320)
+    known = {norm(n) for s in users["field_names"] for n in str(s).split("|") if norm(n)}
+    miss = pd.Series({k: v for k, v in cnt.items() if k and k not in known}).sort_values(ascending=False)
+    section("Tên người thực hiện chưa có tài khoản", "Các plan này chỉ Lead và Quản trị thấy; thêm tài khoản (hoặc thêm tên vào cột 'Tên người thực hiện') để họ tự xem")
+    if miss.empty:
+        st.success("Mọi người thực hiện plan đều đã có tài khoản.")
+    else:
+        show_df(miss.rename_axis("Tên (không dấu)").reset_index(name="Số plan"), height=260)
+
+
 # =====================================================================
 # Main
 # =====================================================================
-def analyze(P, label):
+def analyze(P, label, scope=None):
+    scope = stores if scope is None else scope
     only_l2 = label == "Lần 2"
-    cps_m = store_matrix(P, stores, "CPS", CPS_ITEMS, only_l2)
-    dtv_m = store_matrix(P, stores, "DTV", DTV_ITEMS) if not only_l2 else store_matrix(P.iloc[0:0], stores.iloc[0:0], "DTV", DTV_ITEMS)
-    my_m = mystery_matrix(P, stores)
-    return cps_m, dtv_m, my_m, lead_summary(P, stores, cps_m, dtv_m, my_m)
+    cps_m = store_matrix(P, scope, "CPS", CPS_ITEMS, only_l2)
+    dtv_m = store_matrix(P, scope, "DTV", DTV_ITEMS) if not only_l2 else store_matrix(P.iloc[0:0], scope.iloc[0:0], "DTV", DTV_ITEMS)
+    my_m = mystery_matrix(P, scope)
+    return cps_m, dtv_m, my_m, lead_summary(P, scope, cps_m, dtv_m, my_m)
 
 
 def render_round(file_bytes, fname, label):
@@ -1627,17 +2202,32 @@ def render_round(file_bytes, fname, label):
         st.error(f"File {fname} không có dữ liệu '{label}' trong cột Chấm. "
                  f"Các giá trị Chấm tìm thấy: {bundle['rounds'] or 'không có cột Chấm'}")
         st.stop()
-    if not FLAGS_OK:
+    if IS_ADMIN and not FLAGS_OK:
         st.warning("File store_master.csv trên GitHub là bản cũ (thiếu cột Mystery / L2). "
                    "Hãy upload lại store_master.csv bản mới để số liệu Mystery và Lần 2 đúng.")
     IVc = check_audience(bundle["IV"], staff, ALLOWED_KW)
-    bundle = {**bundle, "IV": IVc, "fb": file_bytes}
+    scope = stores
+    if ROLE == "lead":  # Lead chỉ thấy plan thuộc cửa hàng của mình
+        P = P[P["Lead"] == MY_LEAD].reset_index(drop=True)
+        scope = stores[stores["Lead"] == MY_LEAD]
+        if not IVc.empty and "Lead" in IVc.columns:
+            IVc = IVc[IVc["Lead"] == MY_LEAD]
+    elif ROLE == "field":  # Field chỉ thấy plan do mình thực hiện
+        P = P[P["Field name"].fillna("").apply(norm).isin(MY_NAMES)].reset_index(drop=True)
+        if not IVc.empty and "field_name" in IVc.columns:
+            IVc = IVc[IVc["field_name"].fillna("").apply(norm).isin(MY_NAMES)]
+        field_home(P, IVc, label)
+        return
+    bundle = {**bundle, "P": P, "IV": IVc, "fb": file_bytes}
     alerts = IVc[IVc["Sai đối tượng"]] if (not IVc.empty and "Sai đối tượng" in IVc.columns) else IVc.iloc[0:0]
-    bell(alerts, f"{fname}|{label}")
-    cps_m, dtv_m, my_m, ls = analyze(P, label)
+    bell(alerts, f"{fname}|{label}|{ROLE}|{MY_LEAD}")
+    cps_m, dtv_m, my_m, ls = analyze(P, label, scope)
     camp = campus_matrix(P)
-    tabs = st.tabs(["📊 Tổng quan", "🏬 CPS – 4 hạng mục", "🏪 DTV", "➕ Plus 1–5", "🕵️ Mystery",
-                    "🎓 CAMPUS", "🎤 Trả bài Plus", "⚠️ Bị từ chối", "🧪 Kiểm tra dữ liệu"])
+    names = ["📊 Tổng quan", "🏬 CPS – 4 hạng mục", "🏪 DTV", "➕ Plus 1–5", "🕵️ Mystery", "🎓 CAMPUS",
+             "🎤 Trả bài Plus", "⚠️ Bị từ chối", "👥 Nhân sự Field", "📨 Yêu cầu bổ sung"]
+    if IS_ADMIN:
+        names += ["🧪 Kiểm tra dữ liệu", "🔐 Tài khoản"]
+    tabs = st.tabs(names)
     trade = P[P["Nghiệp vụ"] == "Trade"]
     with tabs[0]:
         safe(tab_overview, P, cps_m, dtv_m, my_m, ls, label, len(alerts))
@@ -1660,7 +2250,14 @@ def render_round(file_bytes, fname, label):
         _when = st.session_state.get(f"{'l2' if label == 'Lần 2' else 'l1'}_saved")
         safe(tab_reject, P, file_bytes, f"{fname}" + (f", lưu lúc {_when}" if _when else ""))
     with tabs[8]:
-        safe(tab_validation, P, bundle, label)
+        safe(tab_field_staff, P)
+    with tabs[9]:
+        safe(tab_requests, P)
+    if IS_ADMIN:
+        with tabs[10]:
+            safe(tab_validation, P, bundle, label)
+        with tabs[11]:
+            safe(tab_accounts, P)
 
 
 def ceo_view():
@@ -1692,6 +2289,6 @@ else:
     pre, label = ("l1", "Lần 1") if view == "📌 LẦN 1" else ("l2", "Lần 2")
     b = st.session_state.get(f"{pre}_bytes")
     if b is None:
-        welcome(label)
+        welcome(label) if IS_ADMIN else st.info(f"Chưa có dữ liệu đợt {label}. Liên hệ quản trị để cập nhật dữ liệu.")
     else:
         render_round(b, st.session_state.get(f"{pre}_name"), label)
