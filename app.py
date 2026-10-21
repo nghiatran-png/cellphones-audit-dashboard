@@ -17,7 +17,7 @@ import streamlit as st
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
                    layout="wide", initial_sidebar_state="expanded")
 
-APP_VERSION = "4.5.0"
+APP_VERSION = "4.7.0"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -543,6 +543,15 @@ def canon_sheet(name):
     return "Trade Audit" if "trade" in n else None
 
 
+NOTE_WORDS = ("note", "ghi chu", "ly do", "nhan xet", "feedback", "comment", "reject")
+
+
+def is_note_col(name):
+    """Cột có vẻ chứa ghi chú / lý do (để không bỏ sót ghi chú QC nằm ở cột tên khác)."""
+    n = norm(name)
+    return n != "qc note" and "khong co diem" not in n and any(w in n for w in NOTE_WORDS)
+
+
 @st.cache_data(show_spinner="Đang đọc file Excel...", max_entries=3)
 def load_report(file_bytes, ver=""):
     xls = pd.ExcelFile(io.BytesIO(file_bytes))
@@ -552,7 +561,7 @@ def load_report(file_bytes, ver=""):
         if key is None or key in out:
             continue
         want = {norm(c): c for c in USECOLS[key]}
-        df = pd.read_excel(xls, sheet_name=s, usecols=lambda c, w=want: norm(c) in w)
+        df = pd.read_excel(xls, sheet_name=s, usecols=lambda c, w=want: norm(c) in w or is_note_col(c))
         df.columns = [want.get(norm(c), c) for c in df.columns]
         out[key] = df
     return out
@@ -586,23 +595,34 @@ def join_notes(s):
     return " | ".join(seen)[:400]
 
 
+def _notes_by_plan(x, col):
+    nn = x[x[col].notna() & x[col].astype(str).str.strip().ne("")]
+    if nn.empty:
+        return pd.Series(dtype=str)
+    return nn.groupby("Tên Plan")[col].agg(join_notes)
+
+
 def plan_level(df):
-    """1 dòng / plan (dòng mới nhất) + gộp các QC note của plan."""
+    """1 dòng / plan (dòng mới nhất) + gộp ghi chú QC của plan (cột 'QC note'; nếu trống thì lấy cột ghi chú khác)."""
     if df is None or df.empty or "Tên Plan" not in df.columns:
         return pd.DataFrame()
     x = df[df["Tên Plan"].notna()].copy()
     x["Tên Plan"] = x["Tên Plan"].astype(str).str.strip()
     x = x[x["Tên Plan"].ne("")]
-    notes = pd.Series(dtype=str)
-    if "QC note" in x.columns:
-        nn = x[x["QC note"].notna() & x["QC note"].astype(str).str.strip().ne("")]
-        if not nn.empty:
-            notes = nn.groupby("Tên Plan")["QC note"].agg(join_notes)
+    performed = (x["Ngày thực hiện"].notna().groupby(x["Tên Plan"]).any()
+                 if "Ngày thực hiện" in x.columns else pd.Series(dtype=bool))
+    notes = _notes_by_plan(x, "QC note") if "QC note" in x.columns else pd.Series(dtype=str)
+    others = {c: _notes_by_plan(x, c) for c in x.columns if c != "QC note" and is_note_col(c)}
     if "Ngày update" in x.columns:
         x["_dt"] = pd.to_datetime(x["Ngày update"], errors="coerce", dayfirst=True)
         x = x.sort_values("_dt", na_position="first", kind="stable").drop(columns="_dt")
     x = x.drop_duplicates("Tên Plan", keep="last").reset_index(drop=True)
-    x["Ghi chú QC"] = x["Tên Plan"].map(notes).fillna("")
+    final = x["Tên Plan"].map(notes).fillna("")
+    for c, ser in others.items():  # ghi chú từ cột khác, gắn tên cột để biết nguồn
+        extra = x["Tên Plan"].map(ser).fillna("")
+        final = final.where(final.ne("") | extra.eq(""), "[" + c + "] " + extra)
+    x["Ghi chú QC"] = final
+    x["Đã thực hiện"] = x["Tên Plan"].map(performed).fillna(False).astype(bool)
     return x
 
 
@@ -640,8 +660,9 @@ def classify_item(kind, plan, hm):
     hm_s = "" if pd.isna(hm) else str(hm).strip()
     text = norm(f"{hm_s} {plan}")
     if kind == "Plus":
-        m = re.search(r"plus\s*(\d)", text)
-        return f"Plus {m.group(1)}" if m else "Plus ?"
+        # số Plus lấy từ TÊN PLAN (…_Trade Audit Plus 3). Cột Hạng mục thật ghi "Plus 10/2026" nên không dùng trước.
+        nums = re.findall(r"plus\s*(\d+)(?!\d|/)", norm(plan)) or re.findall(r"plus\s*(\d+)(?!\d|/)", norm(hm_s))
+        return f"Plus {nums[-1]}" if nums else "Plus ?"
     if kind == "Mystery":
         return hm_s if hm_s else mystery_scn(plan)
     if "dtv" in text:
@@ -684,6 +705,7 @@ def build_plans(sheets, label, stores, campus_kw="CAMPUS"):
             "store": g("Mã cửa hàng").apply(norm_code),
             "lead_raw": g("Tên Leader").apply(canon_leader),
             "status_raw": g("Status Plan"),
+            "performed": g("Đã thực hiện").astype(bool) if "Đã thực hiện" in p.columns else False,
             "Ghi chú QC": g("Ghi chú QC").fillna(""),
             "Ngày update": pd.to_datetime(g("Ngày update"), errors="coerce", dayfirst=True),
             "Field name": g("Tên nhân viên thực hiện"),
@@ -695,7 +717,12 @@ def build_plans(sheets, label, stores, campus_kw="CAMPUS"):
     if not frames:
         return pd.DataFrame(columns=P_COLS)
     P = pd.concat(frames, ignore_index=True)
-    P["Field done"] = P["status_raw"].apply(norm).isin(DONE_FIELD)
+    # Field xong khi: Status Plan = done, hoặc dạng n/n (5/5); riêng Plus, Status Plan chỉ là tiến độ "k/5"
+    # nên Field xong khi plan đã có ngày thực hiện (đã được chấm).
+    st_norm = P["status_raw"].apply(norm)
+    frac = st_norm.str.extract(r"^(\d+)\s*/\s*(\d+)$")
+    P["Field done"] = (st_norm.isin(DONE_FIELD) | (frac[0].notna() & frac[0].eq(frac[1]))
+                       | ((P["Nghiệp vụ"] == "Plus") & P["performed"].astype(bool)))
     P["QC done"] = P["QC"].eq("DONE")
     P["Hoàn thành"] = P["Field done"] & P["QC done"]
     P["Bị từ chối"] = P["QC"].isin(["REJECT", "REWORK"])
@@ -860,7 +887,7 @@ def _group_matrix(t, codes, info, label_fn=None):
 
 
 def mystery_matrix(P, stores):
-    t = P[P["Nghiệp vụ"] == "Mystery"]
+    t = P[(P["Nghiệp vụ"] == "Mystery") & (P["Hệ thống"] != "CAMPUS")]
     has_flag = (not stores.empty) and bool((stores["Mystery"] == "Có").any())
     info = stores.set_index("Mã cửa hàng") if not stores.empty else None
     if has_flag:
@@ -1474,11 +1501,40 @@ def tab_interviews(IV):
         dl_button(allv, "Tat_ca_bai_Plus", "Tat_ca_bai_Plus_hien_tai.xlsx", "dl_all_iv")
 
 
-def tab_reject(P):
+def raw_plan_viewer(P, file_bytes):
+    plans = P.loc[P["Bị từ chối"], "Tên Plan"].tolist()
+    if not plans:
+        return
+    with st.expander("🔍 Xem dòng gốc trong file raw của một plan bị từ chối (để kiểm tra ghi chú QC)"):
+        pick = st.selectbox("Chọn plan", plans, key="raw_plan_pick")
+        shown = False
+        for name, df in load_report(file_bytes, APP_VERSION).items():
+            if "Tên Plan" not in df.columns:
+                continue
+            sub = df[df["Tên Plan"].astype(str).str.strip() == pick]
+            if len(sub):
+                shown = True
+                st.caption(f"Sheet {name}: {len(sub)} dòng · cột ghi chú đọc được: "
+                           + (", ".join(c for c in sub.columns if c == "QC note" or is_note_col(c)) or "không có"))
+                show_df(sub.head(60), height=300)
+        if not shown:
+            st.info("Không tìm thấy dòng nào của plan này trong file raw.")
+
+
+def tab_reject(P, file_bytes=None, file_info=""):
     r = text_filter(lead_filter(P[P["Bị từ chối"]]), ["store", "Tên Plan", "Lead"], search)
     if r.empty:
         st.success("Không có plan nào bị từ chối hoặc yêu cầu bổ sung.")
         return
+    n_no = int(r["Ghi chú QC"].eq("").sum())
+    c = st.columns(3)
+    c[0].metric("Plan bị từ chối / yêu cầu bổ sung", len(r))
+    c[1].metric("Đã có ghi chú QC", len(r) - n_no)
+    c[2].metric("Chưa có ghi chú trong file raw", n_no)
+    if n_no:
+        st.info(f"{n_no} plan chưa có ghi chú trong file raw đang dùng ({file_info or 'file đã nạp'}). "
+                "Nếu trên hệ thống QC đã ghi chú, rất có thể file được xuất TRƯỚC khi QC ghi — hãy xuất lại và nạp file mới. "
+                "Còn nếu file mới vẫn thiếu, mở mục 'Xem dòng gốc' bên dưới để xem ghi chú nằm ở cột nào.")
     a, b = st.columns(2)
     with a:
         bar_chart(r.groupby("Nghiệp vụ").size().reset_index(name="Số plan"), "Nghiệp vụ", "Số plan",
@@ -1488,10 +1544,12 @@ def tab_reject(P):
     out = pd.DataFrame({"Nghiệp vụ": r["Nghiệp vụ"], "Lead": r["Lead"], "Mã cửa hàng": r["store"],
                         "Hạng mục": r["Hạng mục"], "Tên plan": r["Tên Plan"],
                         "Trạng thái QC": r["QC"].map(QC_LABEL).fillna("Khác"),
-                        "Lý do": r["Ghi chú QC"].replace("", "Chưa có ghi chú QC")}).sort_values(["Nghiệp vụ", "Lead"])
+                        "Lý do": r["Ghi chú QC"].replace("", "Chưa có ghi chú QC trong file raw")}).sort_values(["Nghiệp vụ", "Lead"])
     section("Danh sách plan bị từ chối / yêu cầu bổ sung")
     show_df(out, height=520, column_config={"Lý do": st.column_config.TextColumn(width="large")})
     dl_button(out, "Plan_bi_tu_choi", "Plan_bi_tu_choi.xlsx", "dl_rej")
+    if file_bytes is not None:
+        raw_plan_viewer(P, file_bytes)
 
 
 def tab_validation(P, bundle, label):
@@ -1512,8 +1570,21 @@ def tab_validation(P, bundle, label):
               ("Plan có trạng thái QC không nhận diện được", int(P["QC"].eq("UNKNOWN").sum())),
               ("Cửa hàng có trong raw nhưng không có trong danh sách (không tính CAMPUS)",
                len([c for c in set(P["store"]) - set(stores["Mã cửa hàng"]) if (norm(CAMPUS_KW).upper() or "CAMPUS") not in c]))]
+    note_rows = []
+    if bundle.get("fb") is not None:
+        for sh, df in load_report(bundle["fb"], APP_VERSION).items():
+            for c in df.columns:
+                if c == "QC note" or is_note_col(c):
+                    note_rows.append({"Sheet": sh, "Cột ghi chú": c,
+                                      "Số dòng có nội dung": int((df[c].notna() & df[c].astype(str).str.strip().ne("")).sum()),
+                                      "Dùng làm": "Ghi chú QC (ưu tiên)" if c == "QC note" else "Dự phòng khi 'QC note' trống"})
     section("Kiểm tra nguồn dữ liệu")
     show_df(pd.DataFrame(checks, columns=["Nội dung kiểm tra", "Kết quả"]).astype(str))
+    if note_rows:
+        section("Cột ghi chú đọc được từ file raw", "Nếu thiếu cột chứa ghi chú QC của bạn, gửi tên cột đó cho người hỗ trợ")
+        show_df(pd.DataFrame(note_rows))
+    else:
+        st.warning("Không tìm thấy cột ghi chú nào (QC note / Ghi chú / Note…) trong file raw.")
     section("Số plan theo nghiệp vụ, hệ thống và hạng mục", "Dùng để phát hiện hạng mục bị nhận diện sai")
     show_df(P.groupby(["Nghiệp vụ", "Hệ thống", "Hạng mục"]).size().reset_index(name="Số plan"))
     if not stores.empty:
@@ -1556,7 +1627,7 @@ def render_round(file_bytes, fname, label):
         st.warning("File store_master.csv trên GitHub là bản cũ (thiếu cột Mystery / L2). "
                    "Hãy upload lại store_master.csv bản mới để số liệu Mystery và Lần 2 đúng.")
     IVc = check_audience(bundle["IV"], staff, ALLOWED_KW)
-    bundle = {**bundle, "IV": IVc}
+    bundle = {**bundle, "IV": IVc, "fb": file_bytes}
     alerts = IVc[IVc["Sai đối tượng"]] if (not IVc.empty and "Sai đối tượng" in IVc.columns) else IVc.iloc[0:0]
     bell(alerts, f"{fname}|{label}")
     cps_m, dtv_m, my_m, ls = analyze(P, label)
@@ -1582,7 +1653,8 @@ def render_round(file_bytes, fname, label):
     with tabs[6]:
         safe(tab_interviews, bundle["IV"])
     with tabs[7]:
-        safe(tab_reject, P)
+        _when = st.session_state.get(f"{'l2' if label == 'Lần 2' else 'l1'}_saved")
+        safe(tab_reject, P, file_bytes, f"{fname}" + (f", lưu lúc {_when}" if _when else ""))
     with tabs[8]:
         safe(tab_validation, P, bundle, label)
 
