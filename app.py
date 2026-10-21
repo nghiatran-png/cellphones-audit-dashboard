@@ -17,7 +17,7 @@ import streamlit as st
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
                    layout="wide", initial_sidebar_state="expanded")
 
-APP_VERSION = "4.7.0"
+APP_VERSION = "4.7.1"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -780,8 +780,12 @@ def build_interviews(sheets, label, stores, default_max):
         "qc_status": tt1["QC Status"].apply(classify_qc) if "QC Status" in tt1.columns else "NONE",
         "updated_at": pd.to_datetime(tt1["Ngày update"], errors="coerce", dayfirst=True)
         if "Ngày update" in tt1.columns else pd.NaT,
-        "field_done": tt1["Status Plan"].apply(norm).isin(DONE_FIELD) if "Status Plan" in tt1.columns else False,
     })
+    # Field xong: Status Plan = done / n/n, hoặc plan đã có ngày thực hiện (Plus chỉ ghi tiến độ dạng "k/5")
+    st_n = tt1["Status Plan"].apply(norm) if "Status Plan" in tt1.columns else pd.Series("", index=tt1.index)
+    fr = st_n.str.extract(r"^(\d+)\s*/\s*(\d+)$")
+    performed = tt1["Ngày thực hiện"].notna() if "Ngày thực hiện" in tt1.columns else pd.Series(False, index=tt1.index)
+    out["field_done"] = (st_n.isin(DONE_FIELD) | (fr[0].notna() & fr[0].eq(fr[1])) | performed).values
     out["plus_item"] = [classify_item("Plus", pl, "") for pl in out["plan_name"]]
     lead = out["store_code"].map(lead_map)
     out["Lead"] = lead.where(lead.notna() & lead.ne(""), out["lead_raw"]).replace("", "Chưa gán")
