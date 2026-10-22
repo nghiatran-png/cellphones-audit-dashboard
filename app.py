@@ -21,9 +21,9 @@ import plotly.express as px
 import streamlit as st
 
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
-                   layout="wide", initial_sidebar_state="expanded")
+                   layout="wide", initial_sidebar_state="auto")
 
-APP_VERSION = "5.4.0"
+APP_VERSION = "5.6.0"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -102,6 +102,29 @@ section[data-testid="stSidebar"]{background:#fff;border-right:1px solid var(--li
 .st-key-bell_ok button{background:#fff;color:#475467;border:1px solid var(--line)}
 section[data-testid="stSidebar"] .chip{white-space:normal;line-height:1.35}
 [data-testid="stForm"]{border:0!important;padding:0!important}
+.st-key-bell_warn{position:fixed;top:10px;right:96px;z-index:1000;width:auto!important}
+.st-key-bell_warn button{border-radius:999px;font-weight:800;padding:6px 16px;box-shadow:0 6px 18px rgba(16,24,40,.18);background:#f79009;color:#fff;border:2px solid #fff}
+.st-key-bell_warn button:hover{background:#dc6803;color:#fff;border-color:#fff}
+.kpi-row.compact{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.fbanner{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px 22px;margin-bottom:14px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+.fbanner .ft{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.fbanner .fv{font-size:40px;font-weight:800;color:var(--ink);line-height:1.15;margin:4px 0 2px}
+.fbanner .fv span{font-size:16px;font-weight:600;color:var(--muted)}
+.fbanner .fm{font-size:14px;color:#344054;margin-top:10px;font-weight:600}
+.sgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px;margin:10px 0}
+.scard{background:#fff;border:1px solid var(--line);border-left:5px solid #98a2b3;border-radius:12px;padding:14px 16px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+.scard.ok{border-left-color:var(--ok)}.scard.bad{border-left-color:var(--bad)}.scard.warn{border-left-color:var(--warn)}
+.shead{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.scode{font-weight:800;color:var(--ink);font-size:14px;word-break:break-all}
+.sbadge{font-size:12px;font-weight:700;padding:3px 10px;border-radius:99px;background:#f2f4f7;color:#475467;white-space:nowrap}
+.sbadge.ok{background:#ecfdf3;color:#067647}.sbadge.bad{background:#fef3f2;color:#b42318}.sbadge.warn{background:#fffaeb;color:#b54708}
+.saddr{font-size:12px;color:var(--muted);margin-top:4px}
+.schips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.sc{font-size:12px;font-weight:600;padding:4px 9px;border-radius:8px;background:#f2f4f7;color:#475467}
+.sc.ok{background:#ecfdf3;color:#067647}.sc.bad{background:#fef3f2;color:#b42318}.sc.warn{background:#fffaeb;color:#b54708}
+.splus{font-size:12px;color:#475467;margin-top:8px}
+.smiss{font-size:12.5px;color:#b42318;margin-top:8px;font-weight:600}.smiss.ok{color:#067647}
+.sother{font-size:12px;color:var(--muted);margin-top:6px}
 @keyframes ring{0%,100%{box-shadow:0 0 0 0 rgba(217,45,32,.55)}50%{box-shadow:0 0 0 12px rgba(217,45,32,0)}}
 </style>
 """, unsafe_allow_html=True)
@@ -1093,31 +1116,64 @@ def alert_table(alerts):
 _dialog = getattr(st, "dialog", None) or getattr(st, "experimental_dialog", None)
 
 
-def _alerts_body(alerts):
-    st.error(f"Có {len(alerts)} bài Plus phỏng vấn SAI ĐỐI TƯỢNG. Chỉ nhận bài của nhân viên bán hàng, "
-             "trưởng/quản lý cửa hàng, trợ lý cửa hàng và các vị trí AIO.")
-    t = alert_table(alerts)
-    show_df(t, height=380)
-    dl_button(t, "Sai_doi_tuong", "Bai_Plus_sai_doi_tuong.xlsx", "dl_alert_dialog")
+def low_table(low):
+    return pd.DataFrame({
+        "Lead": low["Lead"], "Nhân viên được phỏng vấn": low["employee_name"], "MSNV": low["employee_id"],
+        "Mã cửa hàng": low["store_code"], "Plus": low["plus_item"], "% điểm": low["pct"].round(1),
+        "Người chấm (Field)": low["field_name"]}).sort_values("% điểm")
 
 
-show_alerts = _dialog("🚨 Cảnh báo: bài Plus phỏng vấn sai đối tượng", width="large")(_alerts_body) if _dialog else None
+def split_notices(IVc):
+    """Tách thông báo: bài sai đối tượng và nhân viên phỏng vấn dưới ngưỡng cần follow."""
+    if IVc is None or IVc.empty:
+        e = pd.DataFrame()
+        return e, e
+    wrong = IVc[IVc["Sai đối tượng"].astype(bool)] if "Sai đối tượng" in IVc.columns else IVc.iloc[0:0]
+    low = IVc[IVc["pct"].apply(lambda v: eval_pct(v, THR)).str.startswith("CHƯA ĐẠT")]
+    return wrong, low
 
 
-def bell(alerts, tag):
-    """Chuông cảnh báo góc trên bên phải: đỏ nhấp nháy khi có bài sai đối tượng; tự bật popup 1 lần khi có cảnh báo mới."""
-    n = len(alerts)
-    clicked = st.button(f"🔔 {n} bài sai đối tượng" if n else "🔔 Không có cảnh báo",
-                        key="bell_alert" if n else "bell_ok", help="Bài Plus phỏng vấn sai đối tượng")
-    sig = f"{tag}|{n}"
-    auto = n > 0 and st.session_state.get("bell_seen") != sig
+def _notices_body(wrong, low):
+    if len(wrong):
+        st.error(f"🚨 {len(wrong)} bài Plus phỏng vấn SAI ĐỐI TƯỢNG. Chỉ nhận bài của nhân viên bán hàng, "
+                 "trưởng/quản lý cửa hàng, trợ lý cửa hàng và các vị trí AIO.")
+        t = alert_table(wrong)
+        show_df(t, height=min(60 + 36 * len(t), 300))
+        dl_button(t, "Sai_doi_tuong", "Bai_Plus_sai_doi_tuong.xlsx", "dl_alert_dialog")
+    if len(low):
+        st.warning(f"⚠️ {len(low)} nhân viên phỏng vấn dưới {THR}% điểm: cần follow và trả bài ở kỳ tiếp theo.")
+        t2 = low_table(low)
+        show_df(t2, height=min(60 + 36 * len(t2), 300),
+                column_config={"% điểm": st.column_config.NumberColumn(format="%.1f%%")})
+        dl_button(t2, "Duoi_nguong_can_follow", "Nhan_vien_duoi_nguong_can_follow.xlsx", "dl_low_dialog")
+
+
+show_notices = _dialog("🔔 Thông báo cần xử lý", width="large")(_notices_body) if _dialog else None
+
+
+def bell(wrong, low, tag):
+    """Chuông thông báo: đỏ nhấp nháy khi có bài sai đối tượng, cam khi chỉ có nhân viên dưới ngưỡng cần follow.
+    Chỉ hiện nội dung liên quan tới người đăng nhập (admin thấy toàn bộ). Tự bật popup 1 lần khi có thông báo mới."""
+    n1, n2 = len(wrong), len(low)
+    if n1 and n2:
+        label = f"🔔 {n1} sai đối tượng · {n2} dưới {THR}%"
+    elif n1:
+        label = f"🔔 {n1} bài sai đối tượng"
+    elif n2:
+        label = f"🔔 {n2} nhân viên dưới {THR}% cần follow"
+    else:
+        label = "🔔 Không có thông báo"
+    clicked = st.button(label, key="bell_alert" if n1 else "bell_warn" if n2 else "bell_ok",
+                        help="Thông báo: bài phỏng vấn sai đối tượng, nhân viên phỏng vấn dưới ngưỡng cần follow")
+    sig = f"{tag}|{n1}|{n2}"
+    auto = (n1 + n2) > 0 and st.session_state.get("bell_seen") != sig
     if auto:
         st.session_state["bell_seen"] = sig
-    if n and (clicked or auto):
-        if show_alerts:
-            show_alerts(alerts)
+    if (n1 + n2) and (clicked or auto):
+        if show_notices:
+            show_notices(wrong, low)
         else:
-            _alerts_body(alerts)
+            _notices_body(wrong, low)
 
 
 # =====================================================================
@@ -1218,7 +1274,7 @@ USERS_FILE = find_file("users.csv")
 USERS_LIVE = DATA_DIR / "users_live.csv"  # bản chỉnh sửa của Admin trên máy chủ (ưu tiên hơn users.csv)
 PBKDF2_ITER = 200_000
 ROLE_LABEL = {"admin": "Quản trị", "lead": "Lead", "field": "Field"}
-USER_COLS = ["email", "role", "display_name", "lead", "field_names", "salt", "hash", "key"]
+USER_COLS = ["email", "role", "display_name", "lead", "field_names", "salt", "hash", "key", "active"]
 
 
 def hash_pw(pw, salt_hex):
@@ -1248,6 +1304,9 @@ def load_users(sig=""):
     p = users_source()
     raw = p.read_bytes() if p is not None else gzip.decompress(base64.b64decode("".join(_EMBEDDED_USERS.split())))
     d = pd.read_csv(io.BytesIO(raw), dtype=str).fillna("")
+    if "active" not in d.columns:
+        d["active"] = "1"
+    d["active"] = d["active"].replace("", "1")  # mặc định: đang hoạt động
     d["key"] = d["email"].str.strip().str.lower()
     return d
 
@@ -1273,6 +1332,8 @@ def verify_login(email, pw):
     if ok:
         fails.pop(key, None)
         r = row.iloc[0]
+        if str(r.get("active", "1")) == "0":
+            return None, "Tài khoản đã bị khóa. Liên hệ quản trị dashboard."
         return {k: r[k] for k in ("email", "role", "display_name", "lead", "field_names")}, ""
     if len(fails) > 2000:
         fails.clear()
@@ -1286,6 +1347,9 @@ def login_screen():
                 unsafe_allow_html=True)
     _, mid, _ = st.columns([1, 1.1, 1])
     with mid:
+        notice = st.session_state.pop("login_msg", None)
+        if notice:
+            st.warning(notice)
         with st.container(border=True):
             with st.form("login_form"):
                 email = st.text_input("Email / tên đăng nhập", key="login_email")
@@ -1308,8 +1372,9 @@ if AUTH_ON:
         st.stop()
     _u = load_users(users_signature())
     _r = _u[_u["key"] == str(USER["email"]).strip().lower()]
-    if _r.empty:  # tài khoản đã bị xóa -> buộc đăng xuất
+    if _r.empty or str(_r.iloc[0].get("active", "1")) == "0":  # tài khoản bị xóa hoặc bị khóa -> buộc đăng xuất
         st.session_state.pop("user", None)
+        st.session_state["login_msg"] = "Tài khoản đã bị khóa hoặc không còn tồn tại. Liên hệ quản trị dashboard."
         st.rerun()
     USER = {k: _r.iloc[0][k] for k in ("email", "role", "display_name", "lead", "field_names")}  # cập nhật theo chỉnh sửa mới nhất
     st.session_state["user"] = USER
@@ -1409,6 +1474,7 @@ def apply_user_edits(orig, edited, me_id, known_leads):
         email, role, name, lead, names = (_clean(r.get(c)) for c in ("email", "role", "display_name", "lead", "field_names"))
         if not any([email, role, name, lead, names]):
             continue
+        active = "0" if _clean(r.get("status")).lower() in ("đã khóa", "da khoa", "khóa", "khoa", "locked", "0") else "1"
         line = f"Dòng {pos + 1}"
         key = email.lower()
         if not email or " " in email:
@@ -1428,7 +1494,7 @@ def apply_user_edits(orig, edited, me_id, known_leads):
         base = None
         if pd.notna(oid) and int(oid) in range(len(orig)) and int(oid) not in used:
             base = orig.loc[int(oid)]
-            used[int(oid)] = role
+            used[int(oid)] = (role, active)
         if base is not None:
             salt, hh = base["salt"], base["hash"]
         else:
@@ -1437,14 +1503,16 @@ def apply_user_edits(orig, edited, me_id, known_leads):
             hh = hash_pw(pw, salt)
             new_pw.append({"Tài khoản": email, "Vai trò": role, "Tên": name or email, "Lead": lead, "Mật khẩu ban đầu": pw})
         rows.append({"email": email, "role": role, "display_name": name or email, "lead": lead,
-                     "field_names": names, "salt": salt, "hash": hh})
-    if not any(x["role"] == "admin" for x in rows):
-        errors.append("Phải còn ít nhất một tài khoản Quản trị (admin).")
+                     "field_names": names, "salt": salt, "hash": hh, "active": active})
+    if not any(x["role"] == "admin" and x["active"] == "1" for x in rows):
+        errors.append("Phải còn ít nhất một tài khoản Quản trị (admin) đang hoạt động.")
     if me_id is not None:
         if me_id not in used:
             errors.append("Không thể xóa tài khoản đang đăng nhập.")
-        elif used[me_id] != "admin":
+        elif used[me_id][0] != "admin":
             errors.append("Không thể tự hạ quyền Quản trị của chính mình.")
+        elif used[me_id][1] == "0":
+            errors.append("Không thể tự khóa tài khoản đang đăng nhập.")
     return (None if errors else pd.DataFrame(rows)), new_pw, errors
 
 
@@ -1461,7 +1529,7 @@ def reset_passwords(users, keys):
     return u, out
 
 
-USER_SAVE_COLS = ["email", "role", "display_name", "lead", "field_names", "salt", "hash"]
+USER_SAVE_COLS = ["email", "role", "display_name", "lead", "field_names", "salt", "hash", "active"]
 
 
 def save_users(df):
@@ -1479,6 +1547,9 @@ def base_users():
     else:
         raw = gzip.decompress(base64.b64decode("".join(_EMBEDDED_USERS.split())))
     d = pd.read_csv(io.BytesIO(raw), dtype=str).fillna("")
+    if "active" not in d.columns:
+        d["active"] = "1"
+    d["active"] = d["active"].replace("", "1")
     d["key"] = d["email"].str.strip().str.lower()
     return d
 
@@ -1700,10 +1771,13 @@ def safe(fn, *args, **kw):
             st.code(traceback.format_exc())
 
 
-def tab_overview(P, cps_m, dtv_m, my_m, ls, label, n_alert=0):
+def tab_overview(P, cps_m, dtv_m, my_m, ls, label, n_alert=0, n_low=0):
     if n_alert:
         st.error(f"🚨 Có {n_alert} bài Plus phỏng vấn SAI ĐỐI TƯỢNG. Bấm chuông 🔔 ở góc trên bên phải "
                  "hoặc mở tab 'Trả bài Plus' để xem chi tiết.")
+    if n_low:
+        st.warning(f"⚠️ Có {n_low} nhân viên phỏng vấn dưới {THR}% điểm cần follow, trả bài ở kỳ tiếp theo. "
+                   "Bấm chuông 🔔 hoặc mở tab 'Trả bài Plus'.")
     plus = P[P["Nghiệp vụ"] == "Plus"]
     my_t = my_m[~my_m["Ngoài DS giao"]]
     cd, ct = int(cps_m["_done"].sum()), len(cps_m)
@@ -2160,6 +2234,102 @@ def editor(df, **kw):
         return st.data_editor(df, hide_index=True, **kw)
 
 
+PLUS_MIN = 2  # cửa hàng CPS hoàn thành khi đủ 4 hạng mục và từ 2 bài Plus hoàn thành trở lên
+STORE_STATUS = {"DONE": ("✅ Hoàn thành", "ok"), "REJECT": ("❌ Cần bổ sung", "bad"),
+                "PROGRESS": ("🕓 Đang thực hiện", "warn"), "NOT_STARTED": ("⏳ Chưa thực hiện", "idle")}
+STORE_ORDER = {"REJECT": 0, "PROGRESS": 1, "NOT_STARTED": 2, "DONE": 3}
+ITEM_ICON = {"DONE": "✅", "REJECT": "❌", "WAIT_QC": "🕓", "NOT_FIELD": "⏳", "NONE": "▫️"}
+ITEM_CLS = {"DONE": "ok", "REJECT": "bad", "WAIT_QC": "warn", "NOT_FIELD": "idle", "NONE": "idle"}
+ITEM_TEXT = {"DONE": "hoàn thành", "REJECT": "bị từ chối", "WAIT_QC": "chờ QC duyệt", "NOT_FIELD": "chưa làm xong",
+             "NONE": "chưa có plan"}
+SP_COLS = ["store", "Địa chỉ", "Lead", "Hệ thống", "stt", "Trạng thái", "comp", "Plus hoàn thành", "Plus chờ QC",
+           "Plus bị từ chối", "Plus tổng", "Plus cần", "Còn thiếu", "Người thực hiện"]
+
+
+def store_progress_df(Pall):
+    """Tiến độ theo cửa hàng (CPS / DTV). CPS hoàn thành = đủ 4 hạng mục (Field + QC xong) và từ PLUS_MIN bài Plus hoàn thành;
+    các bài Plus còn lại giữ nguyên trạng thái. DTV hoàn thành = hạng mục Trade Audit DTV hoàn thành."""
+    t = Pall[Pall["Nghiệp vụ"].isin(["Trade", "Plus"]) & Pall["Hệ thống"].isin(["CPS", "DTV"])]
+    if t.empty:
+        return pd.DataFrame(columns=SP_COLS)
+    best = pick_best(t[t["Nghiệp vụ"] == "Trade"])
+    bm = {(r["store"], r["Hạng mục"]): r for _, r in best.iterrows()}
+    plus_by = {k: g for k, g in t[t["Nghiệp vụ"] == "Plus"].groupby("store")}
+    rows = []
+    for code, g in t.groupby("store"):
+        system = g["Hệ thống"].iloc[0]
+        items = CPS_ITEMS if system == "CPS" else DTV_ITEMS
+        comp = {}
+        for it in items:
+            r = bm.get((code, it))
+            comp[it] = ({"st": r["_st"], "who": clean_name(r["Field name"]), "note": r["Ghi chú QC"]} if r is not None
+                        else {"st": "NONE", "who": "", "note": ""})
+        pg = plus_by.get(code, g.iloc[0:0])
+        n_done, n_wait = int(pg["Hoàn thành"].sum()), int((pg["_st"] == "WAIT_QC").sum())
+        n_rej, n_tot = int(pg["Bị từ chối"].sum()), len(pg)
+        need = PLUS_MIN if system == "CPS" else 0
+        plus_ok = n_done >= need
+        all_items = all(v["st"] == "DONE" for v in comp.values())
+        rejected = any(v["st"] == "REJECT" for v in comp.values()) or (not plus_ok and n_rej > 0)
+        started = any(v["st"] in ("DONE", "WAIT_QC", "REJECT") for v in comp.values()) or (n_done + n_wait + n_rej) > 0
+        stt = "DONE" if (all_items and plus_ok) else "REJECT" if rejected else "PROGRESS" if started else "NOT_STARTED"
+        missing = [f"{it}: {ITEM_TEXT[v['st']]}" for it, v in comp.items() if v["st"] != "DONE"]
+        if not plus_ok:
+            extra = (f", {n_wait} chờ QC" if n_wait else "") + (f", {n_rej} bị từ chối" if n_rej else "")
+            missing.append(f"Plus: mới {n_done}/{need} bài hoàn thành{extra}")
+        rows.append({"store": code, "Địa chỉ": g["Địa chỉ"].iloc[0], "Lead": g["Lead"].iloc[0], "Hệ thống": system, "stt": stt,
+                     "Trạng thái": STORE_STATUS[stt][0], "comp": comp, "Plus hoàn thành": n_done, "Plus chờ QC": n_wait,
+                     "Plus bị từ chối": n_rej, "Plus tổng": n_tot, "Plus cần": need, "Còn thiếu": " · ".join(missing),
+                     "Người thực hiện": ", ".join(sorted({clean_name(x) for x in g["Field name"] if clean_name(x)}))})
+    out = pd.DataFrame(rows, columns=SP_COLS)
+    out["_o"] = out["stt"].map(STORE_ORDER)
+    return out.sort_values(["_o", "store"]).drop(columns="_o").reset_index(drop=True)
+
+
+def store_card_html(r, me):
+    label, cls = STORE_STATUS[r["stt"]]
+    chips, others = [], []
+    for it, v in r["comp"].items():
+        txt = f"{it} {ITEM_ICON[v['st']]}"
+        if v["who"] and norm(v["who"]) not in me:
+            others.append(f"{it} ({v['who']})")
+        chips.append(f'<span class="sc {ITEM_CLS[v["st"]]}">{html.escape(txt)}</span>')
+    if r["Plus cần"]:
+        ok = r["Plus hoàn thành"] >= r["Plus cần"]
+        pc = "ok" if ok else ("bad" if r["Plus bị từ chối"] else "warn")
+        chips.append(f'<span class="sc {pc}">Plus {r["Plus hoàn thành"]}/{r["Plus cần"]}+ {"✅" if ok else "⏳"}</span>')
+    plus_line = ""
+    if r["Plus cần"]:
+        bits = [f'{r["Plus hoàn thành"]} hoàn thành']
+        if r["Plus chờ QC"]:
+            bits.append(f'{r["Plus chờ QC"]} chờ QC')
+        if r["Plus bị từ chối"]:
+            bits.append(f'{r["Plus bị từ chối"]} bị từ chối')
+        plus_line = f'<div class="splus">Bài Plus: {" · ".join(bits)} / {r["Plus tổng"]} bài</div>'
+    miss = ('<div class="smiss ok">Đủ điều kiện hoàn thành (các bài Plus còn lại giữ nguyên trạng thái).</div>'
+            if r["stt"] == "DONE" else f'<div class="smiss">Còn thiếu: {html.escape(r["Còn thiếu"])}</div>')
+    oth = f'<div class="sother">Do người khác thực hiện: {html.escape(", ".join(others))}</div>' if others else ""
+    addr = f'<div class="saddr">{html.escape(str(r["Địa chỉ"]))}</div>' if r["Địa chỉ"] else ""
+    return (f'<div class="scard {cls}"><div class="shead"><span class="scode">{html.escape(r["store"])}</span>'
+            f'<span class="sbadge {cls}">{label}</span></div>{addr}<div class="schips">{"".join(chips)}</div>'
+            f'{plus_line}{miss}{oth}</div>')
+
+
+def store_export_df(sp):
+    rows = []
+    for _, r in sp.iterrows():
+        d = {"Mã cửa hàng": r["store"], "Địa chỉ cửa hàng": r["Địa chỉ"], "Lead": r["Lead"], "Hệ thống": r["Hệ thống"],
+             "Trạng thái": r["Trạng thái"]}
+        for it, v in r["comp"].items():
+            d[it] = f"{ITEM_ICON[v['st']]} {ITEM_TEXT[v['st']]}" + (f" ({v['who']})" if v["who"] else "")
+        d.update({"Plus hoàn thành": r["Plus hoàn thành"], "Plus chờ QC": r["Plus chờ QC"], "Plus bị từ chối": r["Plus bị từ chối"],
+                  "Plus tổng": r["Plus tổng"], "Còn thiếu": r["Còn thiếu"] or "Đủ điều kiện", "Người thực hiện": r["Người thực hiện"]})
+        rows.append(d)
+    df = pd.DataFrame(rows)
+    first = ["Mã cửa hàng", "Địa chỉ cửa hàng", "Lead", "Hệ thống", "Trạng thái"] + [c for c in CPS_ITEMS + DTV_ITEMS if c in df.columns]
+    return df[first + [c for c in df.columns if c not in first]] if len(df) else df
+
+
 def tab_field_staff(P):
     t = text_filter(lead_filter(P), ["Field name", "Tên Plan", "store"], search)
     users = load_users(users_signature())
@@ -2182,6 +2352,13 @@ def tab_field_staff(P):
     if g.empty:
         st.info("Chưa có nhân sự Field nào để hiển thị.")
         return
+    sp_all = store_progress_df(P)
+    st_stt = dict(zip(sp_all["store"], sp_all["stt"]))
+    tt = t[t["Nghiệp vụ"].isin(["Trade", "Plus"]) & t["Hệ thống"].isin(["CPS", "DTV"])]
+    owned = tt.groupby("_n")["store"].agg(lambda x: set(x)).to_dict()
+    g.insert(1, "Cửa hàng được giao", g["Nhân sự Field"].map(lambda n: len(owned.get(n, ()))))
+    g.insert(2, "Cửa hàng hoàn thành", g["Nhân sự Field"].map(lambda n: sum(1 for c in owned.get(n, ()) if st_stt.get(c) == "DONE")))
+    g.insert(3, "% cửa hàng hoàn thành", [pct(a, b) if b else np.nan for a, b in zip(g["Cửa hàng hoàn thành"], g["Cửa hàng được giao"])])
     g["% hoàn thành"] = [pct(a, b) if b else np.nan for a, b in zip(g["Hoàn thành"], g["Tổng plan"])]
     g["Yêu cầu đang mở"] = g["Nhân sự Field"].apply(lambda n: int(open_by.get(norm(n), 0)))
     g["Tài khoản"] = g["Nhân sự Field"].apply(lambda n: acct.get(norm(n), "—"))
@@ -2201,7 +2378,7 @@ def tab_field_staff(P):
                                          "Chưa Field xong": "#98a2b3"})
         show_chart(fig)
     section("Bảng kết quả từng nhân sự Field", "Chọn một người ở bên dưới để xem chi tiết plan của họ")
-    show_df(g, height=420, column_config=PCT_CFG(["% hoàn thành"]))
+    show_df(g, height=420, column_config=PCT_CFG(["% cửa hàng hoàn thành", "% hoàn thành"]))
     pick = st.selectbox("Xem chi tiết plan của", ["—"] + g["Nhân sự Field"].tolist(), key="staff_pick")
     if pick != "—":
         d = t[t["_n"] == pick]
@@ -2330,21 +2507,68 @@ def tab_requests(P):
         st.rerun()
 
 
-def field_home(P, IV, label):
+def field_stores_tab(sp):
+    me = MY_NAMES
+    f1, f2 = st.columns([3, 2])
+    flt = f1.radio("Hiển thị", ["Tất cả", "Chưa hoàn thành", "Cần bổ sung", "Đang thực hiện", "Chưa thực hiện", "Đã hoàn thành"],
+                   horizontal=True, key="fld_sfilter")
+    q = f2.text_input("🔎 Tìm mã cửa hàng", key="fld_sq", placeholder="Dán 1 hoặc nhiều mã, cách nhau bằng dấu phẩy")
+    keep = {"Tất cả": None, "Chưa hoàn thành": ["REJECT", "PROGRESS", "NOT_STARTED"], "Cần bổ sung": ["REJECT"],
+            "Đang thực hiện": ["PROGRESS"], "Chưa thực hiện": ["NOT_STARTED"], "Đã hoàn thành": ["DONE"]}[flt]
+    d = sp if keep is None else sp[sp["stt"].isin(keep)]
+    d = token_filter(d, ["store", "Địa chỉ"], q)
+    st.caption(f"Đang hiển thị {len(d)} / {len(sp)} cửa hàng. Cửa hàng được tính hoàn thành khi đủ 4 hạng mục CPS "
+               f"(Demo, Tủ máy, Vách/Đảo, CellphoneS) và từ {PLUS_MIN} bài Plus trở lên đã hoàn thành (Field + QC). "
+               "Cửa hàng DTV hoàn thành khi hạng mục Trade Audit DTV hoàn thành.")
+    if d.empty:
+        st.info("Không có cửa hàng nào khớp bộ lọc.")
+        return
+    st.markdown('<div class="sgrid">' + "".join(store_card_html(r, me) for _, r in d.iterrows()) + "</div>", unsafe_allow_html=True)
+    st.download_button(f"📥 Xuất Excel – tiến độ {len(d)} cửa hàng", data=to_excel_multi({"Tiến độ cửa hàng": store_export_df(d)}),
+                       file_name=f"tien_do_cua_hang_{stamp()}.xlsx", mime=XLSX_MIME, key="fld_dl_stores")
+
+
+def field_home(P, P_all, IV, label):
     me = USER.get("display_name") or USER["email"]
     if P.empty:
         st.info(f"Chưa có plan nào được giao cho {me} trong đợt {label}. Nếu bạn nghĩ đây là nhầm lẫn, báo Lead hoặc quản trị.")
         return
+    sp_all = store_progress_df(P_all)
+    mine = set(P[P["Nghiệp vụ"].isin(["Trade", "Plus"]) & P["Hệ thống"].isin(["CPS", "DTV"])]["store"])
+    sp = sp_all[sp_all["store"].isin(mine)].reset_index(drop=True)
+    n = len(sp)
+    cnt = sp["stt"].value_counts().to_dict() if n else {}
+    n_done, n_rej, n_prog, n_ns = cnt.get("DONE", 0), cnt.get("REJECT", 0), cnt.get("PROGRESS", 0), cnt.get("NOT_STARTED", 0)
+    if n:
+        p = pct(n_done, n)
+        if n_done == n:
+            msg = "🎉 Bạn đã hoàn thành tất cả cửa hàng được giao."
+        else:
+            msg = f"Bạn chưa hoàn thành: còn {n - n_done} cửa hàng ({n_rej} cần bổ sung · {n_prog} đang thực hiện · {n_ns} chưa thực hiện)."
+        st.markdown(
+            f'<div class="fbanner"><div class="ft">Tiến độ cửa hàng của bạn</div>'
+            f'<div class="fv">{n_done}<span> / {n} cửa hàng đã hoàn thành</span></div>'
+            f'<div class="kbar"><span style="width:{min(max(p, 0), 100)}%;background:{tone(p)}"></span></div>'
+            f'<div class="fm">{html.escape(msg)}</div></div>', unsafe_allow_html=True)
+        cards = [kpi_card("Cửa hàng được giao", n, "CPS + DTV"),
+                 kpi_card("Đã hoàn thành", n_done, "đủ điều kiện", pct(n_done, n)),
+                 kpi_card("Đang thực hiện", n_prog, "đã làm một phần / chờ QC"),
+                 kpi_card("Cần bổ sung", n_rej, "có plan bị từ chối", None, bad=True),
+                 kpi_card("Chưa thực hiện", n_ns, "chưa có plan nào xong")]
+        st.markdown('<div class="kpi-row compact">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+    else:
+        st.info("Bạn chưa có cửa hàng CPS/DTV nào được giao trong đợt này (có thể bạn chỉ phụ trách Mystery / CAMPUS).")
     tot, done = len(P), int(P["Hoàn thành"].sum())
     wait, rej, notf = int((P["_st"] == "WAIT_QC").sum()), int(P["Bị từ chối"].sum()), int((P["_st"] == "NOT_FIELD").sum())
-    cards = [kpi_card("Plan được giao", tot, f"đợt {label}"),
-             kpi_card("Đã hoàn thành", f"{done}/{tot}", "Field và QC đều xong", pct(done, tot)),
-             kpi_card("Chờ QC duyệt", wait, "bạn đã làm xong, chờ QC"),
-             kpi_card("Cần bổ sung", rej, "bị từ chối / yêu cầu bổ sung", None, bad=True),
-             kpi_card("Chưa làm xong", notf, "plan chưa hoàn thành phần Field")]
-    st.markdown('<div class="kpi-row">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+    others = P[~P["Nghiệp vụ"].isin(["Trade", "Plus"]) | ~P["Hệ thống"].isin(["CPS", "DTV"])]
+    extra = ""
+    if len(others):
+        extra = f" · Mystery/CAMPUS: {int(others['Hoàn thành'].sum())}/{len(others)} plan hoàn thành"
+    st.caption(f"Tính theo plan: {tot} plan được giao · {done} hoàn thành · {wait} chờ QC · {rej} bị từ chối · {notf} chưa làm xong{extra}")
     my_e2m = {n: USER["email"] for n in MY_NAMES}
-    t1, t2, t3 = st.tabs(["🔔 Việc cần xử lý", "📋 Tất cả plan của tôi", "🎤 Kết quả Plus của tôi"])
+    t0, t1, t2, t3 = st.tabs(["🏬 Cửa hàng của tôi", "🔔 Việc cần xử lý", "📋 Tất cả plan của tôi", "🎤 Kết quả Plus của tôi"])
+    with t0:
+        safe(field_stores_tab, sp)
     with t1:
         fq = st.text_area("🔎 Tìm mã cửa hàng / tên plan", key="fld_q", height=70,
                           placeholder="Dán 1 hoặc nhiều mã cửa hàng, cách nhau bằng dấu phẩy, khoảng trắng hoặc xuống dòng")
@@ -2429,6 +2653,8 @@ def field_home(P, IV, label):
                     height=420, column_config={"% điểm": st.column_config.NumberColumn(format="%.1f%%")})
 
 
+
+
 def tab_accounts(P):
     users = load_users(users_signature())
     if users.empty:
@@ -2440,10 +2666,14 @@ def tab_accounts(P):
             "Đang dùng danh sách tài khoản tích hợp sẵn trong app (chưa thấy users.csv trên GitHub). Khi bạn bấm Lưu, thay đổi được lưu trên máy chủ và có hiệu lực ngay.")
     st.warning("Bản chỉnh sửa lưu trên máy chủ sẽ mất khi app khởi động lại. Sau khi sửa xong, bấm **Tải users.csv** "
                "bên dưới và upload lên GitHub (ghi đè users.csv) để giữ lâu dài.")
-    base = base_users().set_index("key")["hash"].to_dict()
-    changed = [e for e, k, h in zip(users["email"], users["key"], users["hash"]) if base.get(k) != h]
+    fields = ["hash", "active", "role", "lead", "field_names", "display_name"]
+    base_t = {r["key"]: tuple(r[c] for c in fields) for _, r in base_users().iterrows()}
+    cur_t = {r["key"]: tuple(r[c] for c in fields) for _, r in users.iterrows()}
+    changed = [k for k, v in cur_t.items() if base_t.get(k) != v] + [k for k in base_t if k not in cur_t]
+    n_locked = int((users["active"] == "0").sum())
+    st.caption(f"Tổng {len(users)} tài khoản · {len(users) - n_locked} đang hoạt động · {n_locked} đã khóa")
     if changed:
-        st.error(f"{len(changed)} tài khoản đang có mật khẩu/thông tin khác bản gốc trên GitHub (do nhân viên tự đổi mật khẩu hoặc admin chỉnh sửa). "
+        st.error(f"{len(changed)} tài khoản đang có mật khẩu/thông tin/trạng thái khác bản gốc trên GitHub (do nhân viên tự đổi mật khẩu hoặc admin chỉnh sửa). "
                  "Các thay đổi này **mất khi app khởi động lại**: hãy bấm **📥 Tải users.csv hiện tại** ở dưới rồi upload ghi đè `users.csv` lên GitHub.")
     msg = st.session_state.pop("acct_msg", None)
     if msg:
@@ -2464,12 +2694,14 @@ def tab_accounts(P):
 
     base = users.reset_index(drop=True)[["email", "role", "display_name", "lead", "field_names"]].copy()
     base.insert(0, "_id", range(len(base)))
+    base.insert(3, "status", users.reset_index(drop=True)["active"].map(lambda a: "Đã khóa" if a == "0" else "Hoạt động"))
     known_leads = sorted(set(stores["Lead"]) - {""}) if not stores.empty else []
-    section("Chỉnh sửa tài khoản", "Sửa trực tiếp trong bảng. Thêm dòng mới ở cuối bảng; chọn dòng rồi nhấn Delete để xóa tài khoản.")
+    section("Chỉnh sửa tài khoản", "Sửa trực tiếp trong bảng (đổi cột Trạng thái để khóa / mở khóa). Thêm dòng mới ở cuối bảng; chọn dòng rồi nhấn Delete để xóa tài khoản.")
     ed = editor(base, num_rows="dynamic", height=430, key="acct_editor", column_config={
         "_id": None,
         "email": st.column_config.TextColumn("Tài khoản (email)", required=True),
         "role": st.column_config.SelectboxColumn("Vai trò", options=list(VALID_ROLES), required=True),
+        "status": st.column_config.SelectboxColumn("Trạng thái", options=["Hoạt động", "Đã khóa"], required=True),
         "display_name": st.column_config.TextColumn("Tên nhân viên / tên hiển thị"),
         "lead": st.column_config.SelectboxColumn("Lead", options=[""] + known_leads),
         "field_names": st.column_config.TextColumn("Tên người thực hiện trong plan (nhiều tên cách nhau bằng |)", width="large")})
@@ -2504,12 +2736,32 @@ def tab_accounts(P):
         st.session_state["acct_msg"] = f"Đã đặt lại mật khẩu cho {len(out)} tài khoản."
         st.rerun()
 
+    section("Khóa / mở khóa tài khoản", "Khóa: người dùng không đăng nhập được, nếu đang đăng nhập sẽ bị đăng xuất ngay; dữ liệu và mật khẩu được giữ nguyên. Mở khóa để dùng lại.")
+    lock_pick = st.multiselect("Chọn tài khoản", users["email"].tolist(), key="acct_lock_pick")
+    l1, l2 = st.columns(2)
+    for col, label_, val, key_ in [(l1, "🔒 Khóa tài khoản đã chọn", "0", "acct_lock_btn"), (l2, "🔓 Mở khóa tài khoản đã chọn", "1", "acct_unlock_btn")]:
+        with col:
+            if st.button(label_, disabled=not lock_pick, key=key_):
+                keys_ = {p.strip().lower() for p in lock_pick}
+                if val == "0" and me_key in keys_:
+                    st.error("Không thể tự khóa tài khoản đang đăng nhập.")
+                else:
+                    u2 = users.reset_index(drop=True).copy()
+                    u2.loc[u2["key"].isin(keys_), "active"] = val
+                    if val == "0" and not ((u2["role"] == "admin") & (u2["active"] == "1")).any():
+                        st.error("Phải còn ít nhất một tài khoản Quản trị đang hoạt động.")
+                    else:
+                        save_users(u2)
+                        st.session_state["acct_msg"] = f"Đã {'khóa' if val == '0' else 'mở khóa'} {len(keys_)} tài khoản."
+                        st.rerun()
+
     cnt = P["Field name"].fillna("").apply(norm).value_counts().to_dict()
     show = users.assign(**{"Số tên Field": users["field_names"].apply(lambda s: len([x for x in str(s).split("|") if x.strip()])),
                            "Số plan (đợt này)": users["field_names"].apply(
                                lambda s: int(sum(cnt.get(norm(x), 0) for x in str(s).split("|")) if str(s).strip() else 0))})
     section("Thống kê tài khoản", "Mật khẩu không hiển thị (chỉ lưu dạng băm)")
-    show_df(show[["email", "role", "display_name", "lead", "Số tên Field", "Số plan (đợt này)"]].rename(columns={
+    show["Trạng thái"] = show["active"].map(lambda a: "🔒 Đã khóa" if a == "0" else "🟢 Hoạt động")
+    show_df(show[["email", "role", "Trạng thái", "display_name", "lead", "Số tên Field", "Số plan (đợt này)"]].rename(columns={
         "email": "Tài khoản", "role": "Vai trò", "display_name": "Tên", "lead": "Lead"}), height=320)
     known = {norm(n) for s in users["field_names"] for n in str(s).split("|") if norm(n)}
     miss = pd.Series({k: v for k, v in cnt.items() if k and k not in known}).sort_values(ascending=False)
@@ -2680,15 +2932,18 @@ def render_round(file_bytes, fname, label):
         scope = stores[stores["Lead"] == MY_LEAD]
         if not IVc.empty and "Lead" in IVc.columns:
             IVc = IVc[IVc["Lead"] == MY_LEAD]
-    elif ROLE == "field":  # Field chỉ thấy plan do mình thực hiện
+    elif ROLE == "field":  # Field chỉ thấy plan do mình thực hiện (và tiến độ các cửa hàng được giao)
+        P_all = P
         P = P[P["Field name"].fillna("").apply(norm).isin(MY_NAMES)].reset_index(drop=True)
         if not IVc.empty and "field_name" in IVc.columns:
             IVc = IVc[IVc["field_name"].fillna("").apply(norm).isin(MY_NAMES)]
-        field_home(P, IVc, label)
+        wrong, low = split_notices(IVc)
+        bell(wrong, low, f"{fname}|{label}|{ROLE}|{USER['email']}")
+        field_home(P, P_all, IVc, label)
         return
     bundle = {**bundle, "P": P, "IV": IVc, "fb": file_bytes}
-    alerts = IVc[IVc["Sai đối tượng"]] if (not IVc.empty and "Sai đối tượng" in IVc.columns) else IVc.iloc[0:0]
-    bell(alerts, f"{fname}|{label}|{ROLE}|{MY_LEAD}")
+    wrong, low = split_notices(IVc)
+    bell(wrong, low, f"{fname}|{label}|{ROLE}|{MY_LEAD}")
     cps_m, dtv_m, my_m, ls = analyze(P, label, scope)
     camp = campus_matrix(P)
     names = ["📊 Tổng quan", "🏬 CPS – 4 hạng mục", "🏪 DTV", "➕ Plus 1–5", "🕵️ Mystery", "🎓 CAMPUS",
@@ -2698,7 +2953,7 @@ def render_round(file_bytes, fname, label):
     tabs = st.tabs(names)
     trade = P[P["Nghiệp vụ"] == "Trade"]
     with tabs[0]:
-        safe(tab_overview, P, cps_m, dtv_m, my_m, ls, label, len(alerts))
+        safe(tab_overview, P, cps_m, dtv_m, my_m, ls, label, len(wrong), len(low))
     with tabs[1]:
         safe(tab_trade, cps_m, CPS_ITEMS, "CPS", "cps", int((trade["Hệ thống"] == "CPS").sum()), label)
     with tabs[2]:
