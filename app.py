@@ -23,7 +23,7 @@ import streamlit as st
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
                    layout="wide", initial_sidebar_state="expanded")
 
-APP_VERSION = "5.1.0"
+APP_VERSION = "5.3.0"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -233,6 +233,7 @@ SERIES_COLORS = {
     "Bị từ chối": "#f04438", "Hoàn thành (Field + QC)": "#12b76a", "Hoàn thành": "#12b76a", "Hoàn tất": "#12b76a",
     "Field xong": "#2e90fa", "QC duyệt xong": "#7a5af8", "Tổng plan": "#98a2b3", "Giao": "#98a2b3",
     "Đã đủ": "#12b76a", "Chưa đủ": "#f04438", "Tổng": "#98a2b3",
+    "Đã duyệt": "#12b76a", "Từ chối": "#f04438", "Chưa chấm": "#f79009",
     "CPS (cửa hàng)": "#b2ddff", "CPS hoàn thành": "#2e90fa", "DTV (cửa hàng)": "#d9d6fe", "DTV hoàn thành": "#7a5af8",
     "Mystery (giao)": "#fedf89", "Mystery hoàn tất": "#f79009",
     "% CPS": "#2e90fa", "% DTV": "#7a5af8", "% Mystery": "#f79009", "% Plus": "#06aed4",
@@ -537,7 +538,7 @@ def merge_flags(stores, default):
 # Raw data loading
 # =====================================================================
 BASE_COLS = ["Tên Plan", "Chấm", "Hệ thống", "Mã cửa hàng", "Tên Leader", "Tên nhân viên thực hiện",
-             "Ngày update", "Status Plan", "QC Status", "Ngày thực hiện", "Hạng mục", "QC note"]
+             "Ngày update", "Status Plan", "QC Status", "Ngày thực hiện", "Hạng mục", "QC note", "Tên Auditor", "QC Manager Check"]
 PLUS_COLS = BASE_COLS + ["MSNV", "Mã câu hỏi", "Câu trả lời", "Trả lời ngay", "Trả lời Phụ",
                          "Trả lời có tài liệu", "Có xem tài liệu", "Thang điểm", "Thực đạt"]
 USECOLS = {"Mystery Audit": BASE_COLS, "Trade Audit": BASE_COLS, "Trade Audit Plus": PLUS_COLS}
@@ -620,6 +621,8 @@ def plan_level(df):
     x = x[x["Tên Plan"].ne("")]
     performed = (x["Ngày thực hiện"].notna().groupby(x["Tên Plan"]).any()
                  if "Ngày thực hiện" in x.columns else pd.Series(dtype=bool))
+    th_date = (pd.to_datetime(x["Ngày thực hiện"], errors="coerce", dayfirst=True).groupby(x["Tên Plan"]).max()
+               if "Ngày thực hiện" in x.columns else pd.Series(dtype="datetime64[ns]"))
     notes = _notes_by_plan(x, "QC note") if "QC note" in x.columns else pd.Series(dtype=str)
     others = {c: _notes_by_plan(x, c) for c in x.columns if c != "QC note" and is_note_col(c)}
     if "Ngày update" in x.columns:
@@ -632,6 +635,7 @@ def plan_level(df):
         final = final.where(final.ne("") | extra.eq(""), "[" + c + "] " + extra)
     x["Ghi chú QC"] = final
     x["Đã thực hiện"] = x["Tên Plan"].map(performed).fillna(False).astype(bool)
+    x["Ngày TH"] = x["Tên Plan"].map(th_date)
     return x
 
 
@@ -689,7 +693,7 @@ def classify_item(kind, plan, hm):
 
 P_COLS = ["Nghiệp vụ", "Tên Plan", "store", "Hệ thống", "Hạng mục", "Lead", "Địa chỉ", "QC", "Field done",
           "QC done", "Hoàn thành", "Bị từ chối", "_st", "Ghi chú QC", "Ngày update", "Field name",
-          "lead_raw", "status_raw"]
+          "lead_raw", "status_raw", "auditor", "QM", "Chờ QM", "th_date"]
 
 
 def build_plans(sheets, label, stores, campus_kw="CAMPUS"):
@@ -715,6 +719,9 @@ def build_plans(sheets, label, stores, campus_kw="CAMPUS"):
             "lead_raw": g("Tên Leader").apply(canon_leader),
             "status_raw": g("Status Plan"),
             "performed": g("Đã thực hiện").astype(bool) if "Đã thực hiện" in p.columns else False,
+            "auditor": g("Tên Auditor").fillna("").astype(str).str.strip(),
+            "qm_raw": g("QC Manager Check"),
+            "th_date": pd.to_datetime(g("Ngày TH"), errors="coerce") if "Ngày TH" in p.columns else pd.NaT,
             "Ghi chú QC": g("Ghi chú QC").fillna(""),
             "Ngày update": pd.to_datetime(g("Ngày update"), errors="coerce", dayfirst=True),
             "Field name": g("Tên nhân viên thực hiện"),
@@ -735,6 +742,8 @@ def build_plans(sheets, label, stores, campus_kw="CAMPUS"):
     P["QC done"] = P["QC"].eq("DONE")
     P["Hoàn thành"] = P["Field done"] & P["QC done"]
     P["Bị từ chối"] = P["QC"].isin(["REJECT", "REWORK"])
+    P["QM"] = P["qm_raw"].apply(classify_qc)
+    P["Chờ QM"] = P["QC done"] & P["QM"].isin(["PENDING", "PENDING_REVIEW", "NONE"])  # QC viên đã duyệt, Manager chưa duyệt
     P["_st"] = np.select([P["Hoàn thành"], P["Bị từ chối"], P["Field done"]],
                          ["DONE", "REJECT", "WAIT_QC"], "NOT_FIELD")
     lead = P["store"].map(lead_map)
@@ -938,29 +947,38 @@ def lead_summary(P, stores, cps_m, dtv_m, my_m):
     return pd.DataFrame(rows)
 
 
-def to_excel(df, sheet):
+def to_excel_multi(sheets):
+    """Xuất nhiều sheet cùng định dạng (tiêu đề đỏ, tự giãn cột, ngắt dòng cho cột dài, lọc, cố định dòng đầu)."""
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="xlsxwriter") as w:
-        d = df[[c for c in df.columns if not c.startswith("_")]]
-        d.to_excel(w, index=False, sheet_name=sheet[:31])
-        wb, ws = w.book, w.sheets[sheet[:31]]
+        wb = w.book
         hf = wb.add_format({"bold": True, "font_color": "white", "bg_color": "#D70018", "border": 1,
-                            "align": "center", "valign": "vcenter"})
+                            "align": "center", "valign": "vcenter", "text_wrap": True})
         ok = wb.add_format({"bg_color": "#D1E7DD", "font_color": "#0F5132", "bold": True})
         bad = wb.add_format({"bg_color": "#F8D7DA", "font_color": "#842029", "bold": True})
-        for i, n in enumerate(d.columns):
-            ws.write(0, i, n, hf)
-            body = int(d[n].astype(str).str.len().fillna(0).quantile(.90)) + 2 if len(d) else 12
-            ws.set_column(i, i, min(max(len(str(n)) + 2, body), 60))
-        last = max(len(d), 1)
-        for cand in ["Kết luận", "Đánh giá", "Kết quả L2"]:
-            if cand in d.columns:
-                c = d.columns.get_loc(cand)
-                ws.conditional_format(1, c, last, c, {"type": "cell", "criteria": "==", "value": '"ĐẠT"', "format": ok})
-                ws.conditional_format(1, c, last, c, {"type": "text", "criteria": "begins with", "value": "CHƯA ĐẠT", "format": bad})
-        ws.freeze_panes(1, 0)
-        ws.autofilter(0, 0, len(d), len(d.columns) - 1)
+        wrap = wb.add_format({"text_wrap": True, "valign": "top"})
+        for name, df in sheets.items():
+            nm = str(name)[:31]
+            d = df[[c for c in df.columns if not str(c).startswith("_")]]
+            d.to_excel(w, index=False, sheet_name=nm)
+            ws = w.sheets[nm]
+            for i, n in enumerate(d.columns):
+                ws.write(0, i, n, hf)
+                body = int(d[n].astype(str).str.len().fillna(0).quantile(.90)) + 2 if len(d) else 12
+                ws.set_column(i, i, min(max(len(str(n)) + 2, body), 60), wrap if body > 45 else None)
+            last = max(len(d), 1)
+            for cand in ["Kết luận", "Đánh giá", "Kết quả L2"]:
+                if cand in d.columns:
+                    c = d.columns.get_loc(cand)
+                    ws.conditional_format(1, c, last, c, {"type": "cell", "criteria": "==", "value": '"ĐẠT"', "format": ok})
+                    ws.conditional_format(1, c, last, c, {"type": "text", "criteria": "begins with", "value": "CHƯA ĐẠT", "format": bad})
+            ws.freeze_panes(1, 0)
+            ws.autofilter(0, 0, len(d), max(len(d.columns) - 1, 0))
     return out.getvalue()
+
+
+def to_excel(df, sheet):
+    return to_excel_multi({sheet: df})
 
 
 def dl_button(df, sheet, fname, key):
@@ -1105,6 +1123,97 @@ def bell(alerts, tag):
 # =====================================================================
 # Đăng nhập và phân quyền (admin / lead / field)
 # =====================================================================
+_EMBEDDED_USERS = """
+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
+OAAA
+"""
+
 USERS_FILE = find_file("users.csv")
 USERS_LIVE = DATA_DIR / "users_live.csv"  # bản chỉnh sửa của Admin trên máy chủ (ưu tiên hơn users.csv)
 PBKDF2_ITER = 200_000
@@ -1117,24 +1226,28 @@ def hash_pw(pw, salt_hex):
 
 
 def users_source():
-    return USERS_LIVE if USERS_LIVE.exists() else USERS_FILE
+    """Ưu tiên: bản Admin chỉnh sửa trên máy chủ > users.csv trên GitHub > bản tích hợp sẵn trong app (None)."""
+    if USERS_LIVE.exists():
+        return USERS_LIVE
+    return USERS_FILE if (USERS_FILE is not None and USERS_FILE.exists()) else None
 
 
 def users_signature():
     try:
         p = users_source()
+        if p is None:
+            return "embedded"
         stt = p.stat()
         return f"{p.name}-{stt.st_mtime_ns}-{stt.st_size}"
-    except (OSError, AttributeError):
+    except OSError:
         return "missing"
 
 
 @st.cache_data(show_spinner=False)
 def load_users(sig=""):
     p = users_source()
-    if p is None or not p.exists():
-        return pd.DataFrame(columns=USER_COLS)
-    d = pd.read_csv(p, dtype=str).fillna("")
+    raw = p.read_bytes() if p is not None else gzip.decompress(base64.b64decode("".join(_EMBEDDED_USERS.split())))
+    d = pd.read_csv(io.BytesIO(raw), dtype=str).fillna("")
     d["key"] = d["email"].str.strip().str.lower()
     return d
 
@@ -1187,7 +1300,7 @@ def login_screen():
         st.caption("Chưa có tài khoản hoặc quên mật khẩu: liên hệ quản trị dashboard.")
 
 
-AUTH_ON = users_source() is not None
+AUTH_ON = True  # luôn bật đăng nhập (không còn chế độ mở)
 if AUTH_ON:
     USER = st.session_state.get("user")
     if not USER:
@@ -1544,6 +1657,7 @@ def tab_overview(P, cps_m, dtv_m, my_m, ls, label, n_alert=0):
         kpi_card("Plus – plan hoàn thành", f"{pdn}/{pt}", "Field và QC đều đã xong", pct(pdn, pt)),
         kpi_card("Mystery – cửa hàng hoàn tất", f"{md}/{mt}", "trên tổng số cửa hàng được giao", pct(md, mt)),
         kpi_card("Plan bị từ chối", int(P["Bị từ chối"].sum()), "cần chấm lại / bổ sung", None, bad=True),
+        kpi_card("QC chưa chấm", int((P["_st"] == "WAIT_QC").sum()), "plan Field xong, chờ QC viên", None, bad=True),
     ]
     st.markdown('<div class="kpi-row">' + "".join(cards) + "</div>", unsafe_allow_html=True)
 
@@ -1900,6 +2014,85 @@ def tab_validation(P, bundle, label):
             st.write(", ".join(other))
 
 
+def clean_name(v):
+    return "" if pd.isna(v) else str(v).strip()
+
+
+def token_filter(df, cols, q):
+    """Tìm nhiều từ khóa một lúc (ví dụ dán nhiều mã cửa hàng, cách nhau bằng dấu phẩy / khoảng trắng / xuống dòng)."""
+    toks = [norm(t) for t in re.split(r"[,;\s]+", str(q or "")) if norm(t)]
+    if not toks or df is None or df.empty:
+        return df
+    hay = pd.Series("", index=df.index)
+    for c in cols:
+        hay = hay + " " + df[c].fillna("").astype(str).apply(norm)
+    return df[hay.str.contains("|".join(re.escape(t) for t in toks), regex=True)]
+
+
+FOLLOW_COLS = ["STT", "Mã cửa hàng", "Địa chỉ cửa hàng", "Lead", "Nghiệp vụ", "Hạng mục", "Tên plan", "Người thực hiện",
+               "Tài khoản", "Tình trạng", "Lý do QC", "Trạng thái yêu cầu", "Nội dung yêu cầu", "Ngày gửi",
+               "Phản hồi của Field", "Ngày bổ sung"]
+
+
+def followup_df(sub, reqs, e2m):
+    """File theo dõi bổ sung: mỗi plan một dòng, kèm trạng thái yêu cầu mới nhất đã gửi."""
+    last = {r["plan"]: r for r in reqs}  # yêu cầu mới nhất của từng plan
+    rows = []
+    for i, (_, r) in enumerate(sub.iterrows(), 1):
+        q = last.get(r["Tên Plan"], {})
+        who = clean_name(r["Field name"])
+        rows.append({"STT": i, "Mã cửa hàng": r["store"], "Địa chỉ cửa hàng": r.get("Địa chỉ", ""), "Lead": r["Lead"],
+                     "Nghiệp vụ": r["Nghiệp vụ"], "Hạng mục": r["Hạng mục"], "Tên plan": r["Tên Plan"],
+                     "Người thực hiện": who, "Tài khoản": e2m.get(norm(who), ""),
+                     "Tình trạng": STATUS_LABEL.get(r["_st"], r["_st"]),
+                     "Lý do QC": r["Ghi chú QC"] or "Chưa có ghi chú QC",
+                     "Trạng thái yêu cầu": q.get("status", "Chưa gửi"), "Nội dung yêu cầu": q.get("message", ""),
+                     "Ngày gửi": q.get("created", ""), "Phản hồi của Field": q.get("field_reply", ""),
+                     "Ngày bổ sung": q.get("done_at", "")})
+    return pd.DataFrame(rows, columns=FOLLOW_COLS)
+
+
+def followup_by_person(fu):
+    if fu.empty:
+        return pd.DataFrame(columns=["Người thực hiện", "Tài khoản", "Số plan", "Số cửa hàng", "Đã gửi yêu cầu", "Chưa gửi yêu cầu"])
+    d = fu.assign(_who=fu["Người thực hiện"].replace("", "(chưa có người thực hiện)"))
+    g = d.groupby("_who").agg(**{"Tài khoản": ("Tài khoản", "first"), "Số plan": ("Tên plan", "size"),
+                                 "Số cửa hàng": ("Mã cửa hàng", "nunique"),
+                                 "Đã gửi yêu cầu": ("Trạng thái yêu cầu", lambda s: int((s != "Chưa gửi").sum())),
+                                 "Chưa gửi yêu cầu": ("Trạng thái yêu cầu", lambda s: int((s == "Chưa gửi").sum()))})
+    return g.reset_index().rename(columns={"_who": "Người thực hiện"}).sort_values("Số plan", ascending=False)
+
+
+def followup_message(person, g, sender, note="Bạn kiểm tra và bổ sung giúp mình, xong báo lại nhé."):
+    lines = [f"Chào {person},", f"{sender} nhờ bạn bổ sung {len(g)} plan sau:"]
+    for i, (_, r) in enumerate(g.iterrows(), 1):
+        lines.append(f"{i}. {r['Mã cửa hàng']} – {r['Nghiệp vụ']} {r['Hạng mục']}: {r['Lý do QC']}")
+    lines += [note, "Cảm ơn bạn!"]
+    return "\n".join(lines)
+
+
+def followup_messages(fu, sender, note="Bạn kiểm tra và bổ sung giúp mình, xong báo lại nhé."):
+    out = {}
+    for who, g in fu.groupby(fu["Người thực hiện"].replace("", "(chưa có người thực hiện)")):
+        out[who] = followup_message(who, g, sender, note)
+    return out
+
+
+def followup_sheets(fu, sender):
+    msgs = followup_messages(fu, sender)
+    by = followup_by_person(fu)
+    mdf = pd.DataFrame({"Người thực hiện": list(msgs), "Số plan": [int((fu["Người thực hiện"].replace("", "(chưa có người thực hiện)") == k).sum()) for k in msgs],
+                        "Tin nhắn gửi nhân sự": list(msgs.values())})
+    return {"Cần bổ sung": fu, "Theo người thực hiện": by, "Tin nhắn gửi nhân sự": mdf}, msgs
+
+
+def stamp():
+    return pd.Timestamp.now(tz="Asia/Ho_Chi_Minh").strftime("%Y%m%d_%H%M")
+
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
 def editor(df, **kw):
     try:
         return st.data_editor(df, hide_index=True, **STRETCH, **kw)
@@ -1961,31 +2154,55 @@ REQ_KINDS = {"Bị từ chối / yêu cầu bổ sung": "REJ", "Đã Field xong 
              "Chưa Field xong": "NOT_FIELD", "Tất cả plan chưa hoàn thành": "ALL"}
 
 
+def sender_label():
+    if ROLE == "lead":
+        return f"Lead {MY_LEAD}"
+    return f"Lead {selected_leader}" if selected_leader != "Tất cả" else "Quản trị"
+
+
 def tab_requests(P):
-    section("Gửi yêu cầu bổ sung cho nhân sự Field", "Chọn plan rồi gửi: nhân sự Field sẽ thấy yêu cầu trong màn hình của họ")
+    section("Gửi yêu cầu bổ sung cho nhân sự Field",
+            "Tìm theo mã cửa hàng, chọn plan rồi gửi: nhân sự Field sẽ thấy yêu cầu trong màn hình của họ")
     kind = REQ_KINDS[st.selectbox("Loại plan", list(REQ_KINDS), key="req_kind")]
     base = lead_filter(P)
     mask = {"REJ": base["Bị từ chối"], "WAIT_QC": base["_st"].eq("WAIT_QC"), "NOT_FIELD": base["_st"].eq("NOT_FIELD"),
             "ALL": ~base["Hoàn thành"]}[kind]
-    cand = text_filter(base[mask], ["store", "Tên Plan", "Field name"], search).reset_index(drop=True)
+    pool = base[mask]
+    f1, f2, f3 = st.columns([2.2, 1, 1.4])
+    q = f1.text_area("🔎 Tìm mã cửa hàng / tên plan / người thực hiện", key="req_search", height=70,
+                     placeholder="Dán 1 hoặc nhiều mã cửa hàng, cách nhau bằng dấu phẩy, khoảng trắng hoặc xuống dòng")
+    sel_nv = f2.multiselect("Nghiệp vụ", sorted(pool["Nghiệp vụ"].unique()), key="req_nv")
+    sel_who = f3.multiselect("Người thực hiện", sorted({clean_name(x) for x in pool["Field name"] if clean_name(x)}), key="req_who")
+    cand = pool
+    if sel_nv:
+        cand = cand[cand["Nghiệp vụ"].isin(sel_nv)]
+    if sel_who:
+        cand = cand[cand["Field name"].apply(clean_name).isin(sel_who)]
+    cand = token_filter(cand, ["store", "Tên Plan", "Field name"], q)
+    cand = text_filter(cand, ["store", "Tên Plan", "Field name"], search).reset_index(drop=True)
+    st.caption(f"Đang hiển thị {len(cand)} / {len(pool)} plan")
+    reqs_all = load_requests()
+    e2m = name_email_map() if AUTH_ON else {}
+    sender = sender_label()
     if cand.empty:
-        st.success("Không có plan nào thuộc loại này.")
+        st.success("Không có plan nào khớp bộ lọc.")
     else:
-        tbl = pd.DataFrame({"Chọn": False, "Mã cửa hàng": cand["store"], "Nghiệp vụ": cand["Nghiệp vụ"], "Hạng mục": cand["Hạng mục"],
-                            "Tên plan": cand["Tên Plan"], "Người thực hiện": cand["Field name"].fillna(""),
+        sel_all = st.checkbox("Chọn tất cả plan đang hiển thị", key="req_selall")
+        tbl = pd.DataFrame({"Chọn": bool(sel_all), "Mã cửa hàng": cand["store"], "Nghiệp vụ": cand["Nghiệp vụ"], "Hạng mục": cand["Hạng mục"],
+                            "Tên plan": cand["Tên Plan"], "Người thực hiện": cand["Field name"].apply(clean_name),
                             "Tình trạng": cand["_st"].map(STATUS_LABEL),
                             "Lý do QC": cand["Ghi chú QC"].replace("", "Chưa có ghi chú QC")})
-        ed = editor(tbl, disabled=[c for c in tbl.columns if c != "Chọn"], height=380, key=f"req_editor_{kind}",
+        ed = editor(tbl, disabled=[c for c in tbl.columns if c != "Chọn"], height=380,
+                    key=f"req_editor_{kind}_{int(sel_all)}_{abs(hash(tuple(cand['Tên Plan']))) % 10**8}",
                     column_config={"Chọn": st.column_config.CheckboxColumn("Chọn", default=False)})
         msg = st.text_area("Nội dung yêu cầu", "Vui lòng bổ sung / chấm lại plan này theo ghi chú QC và cập nhật lại sớm.",
                            key="req_msg")
         n_sel = int(ed["Chọn"].sum())
         if st.button(f"📨 Gửi yêu cầu cho {n_sel} plan đã chọn", disabled=n_sel == 0, type="primary", key="req_send"):
-            e2m = name_email_map() if AUTH_ON else {}
             new, no_owner = [], 0
             for i in ed.index[ed["Chọn"]]:
                 r = cand.loc[i]
-                nm = str(r["Field name"] or "").strip()
+                nm = clean_name(r["Field name"])
                 if not nm:
                     no_owner += 1
                     continue
@@ -2000,6 +2217,21 @@ def tab_requests(P):
                 st.info(f"Bỏ qua {s_} plan vì đang có yêu cầu mở.")
             if no_owner:
                 st.warning(f"{no_owner} plan chưa có người thực hiện trong dữ liệu nên chưa gửi được.")
+        section("Xuất file theo dõi và tin nhắn gửi nhân sự",
+                "File Excel gồm 3 sheet: danh sách cần bổ sung (kèm trạng thái yêu cầu), tổng hợp theo người, tin nhắn soạn sẵn")
+        fu = followup_df(cand, reqs_all, e2m)
+        sheets, msgs = followup_sheets(fu, sender)
+        e1, e2 = st.columns(2)
+        e1.download_button(f"📥 Xuất Excel – {len(fu)} plan đang hiển thị", data=to_excel_multi(sheets),
+                           file_name=f"yeu_cau_bo_sung_{stamp()}.xlsx", mime=XLSX_MIME, key="req_dl_all")
+        if n_sel:
+            sh2, _ = followup_sheets(followup_df(cand.loc[ed.index[ed["Chọn"]]], reqs_all, e2m), sender)
+            e2.download_button(f"📥 Xuất Excel – {n_sel} plan đã chọn", data=to_excel_multi(sh2),
+                               file_name=f"yeu_cau_bo_sung_da_chon_{stamp()}.xlsx", mime=XLSX_MIME, key="req_dl_sel")
+        who = st.selectbox("Tin nhắn soạn sẵn gửi cho", list(msgs), key="req_msg_who")
+        st.caption("Bấm biểu tượng sao chép ở góc phải khung bên dưới rồi dán vào Zalo / tin nhắn gửi nhân sự.")
+        st.code(msgs[who], language=None)
+
     section("Yêu cầu đã gửi", "Trạng thái: Mở → Đã bổ sung (nhân sự Field bấm) → Đã đóng (Lead xác nhận)")
     items = [r for r in load_requests() if IS_ADMIN or r.get("from_lead") == MY_LEAD]
     if selected_leader != "Tất cả" and IS_ADMIN:
@@ -2012,10 +2244,24 @@ def tab_requests(P):
     c[0].metric("Đang mở", int((df["status"] == "Mở").sum()))
     c[1].metric("Đã bổ sung – chờ xác nhận", int((df["status"] == "Đã bổ sung").sum()))
     c[2].metric("Đã đóng", int((df["status"] == "Đã đóng").sum()))
-    view = df[["id", "created", "status", "store", "kind", "item", "to_name", "message", "field_reply", "done_at", "plan"]].rename(columns={
+    g1, g2 = st.columns([2.2, 1])
+    fq = g1.text_area("🔎 Tìm trong yêu cầu đã gửi (mã cửa hàng / tên plan / người nhận)", key="req_sent_q", height=70)
+    fs = g2.multiselect("Trạng thái", ["Mở", "Đã bổ sung", "Đã đóng"], key="req_sent_s")
+    dff = token_filter(df, ["store", "plan", "to_name"], fq)
+    if fs:
+        dff = dff[dff["status"].isin(fs)]
+    view = dff[["id", "created", "status", "store", "kind", "item", "to_name", "message", "field_reply", "done_at", "plan"]].rename(columns={
         "id": "Mã YC", "created": "Gửi lúc", "status": "Trạng thái", "store": "Mã cửa hàng", "kind": "Nghiệp vụ", "item": "Hạng mục",
         "to_name": "Gửi cho", "message": "Nội dung", "field_reply": "Phản hồi của Field", "done_at": "Bổ sung lúc", "plan": "Tên plan"})
+    st.caption(f"Đang hiển thị {len(view)} / {len(df)} yêu cầu")
     show_df(view.iloc[::-1], height=360)
+    if not dff.empty:
+        summ = pd.crosstab(dff["to_name"], dff["status"]).reindex(columns=["Mở", "Đã bổ sung", "Đã đóng"], fill_value=0)
+        summ["Tổng"] = summ.sum(axis=1)
+        summ = summ.rename_axis("Gửi cho").reset_index().sort_values("Tổng", ascending=False)
+        st.download_button(f"📥 Xuất Excel – theo dõi {len(view)} yêu cầu đã gửi",
+                           data=to_excel_multi({"Theo dõi yêu cầu": view.iloc[::-1], "Tổng hợp theo người nhận": summ}),
+                           file_name=f"theo_doi_yeu_cau_{stamp()}.xlsx", mime=XLSX_MIME, key="req_dl_sent")
     open_ids = df[df["status"] != "Đã đóng"]["id"].tolist()
     close = st.multiselect("Đóng yêu cầu (đã nhận đủ bổ sung)", open_ids, key="req_close")
     if st.button("Đóng các yêu cầu đã chọn", disabled=not close, key="req_close_btn"):
@@ -2037,13 +2283,32 @@ def field_home(P, IV, label):
              kpi_card("Cần bổ sung", rej, "bị từ chối / yêu cầu bổ sung", None, bad=True),
              kpi_card("Chưa làm xong", notf, "plan chưa hoàn thành phần Field")]
     st.markdown('<div class="kpi-row">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+    my_e2m = {n: USER["email"] for n in MY_NAMES}
     t1, t2, t3 = st.tabs(["🔔 Việc cần xử lý", "📋 Tất cả plan của tôi", "🎤 Kết quả Plus của tôi"])
     with t1:
-        mine = [r for r in load_requests() if r.get("status") in ("Mở", "Đã bổ sung")
-                and (str(r.get("to_email", "")).lower() == USER["email"].lower() or norm(r.get("to_name", "")) in MY_NAMES)]
+        fq = st.text_area("🔎 Tìm mã cửa hàng / tên plan", key="fld_q", height=70,
+                          placeholder="Dán 1 hoặc nhiều mã cửa hàng, cách nhau bằng dấu phẩy, khoảng trắng hoặc xuống dòng")
+        toks = [norm(t) for t in re.split(r"[,;\s]+", fq or "") if norm(t)]
+        mine_all = [r for r in load_requests() if (str(r.get("to_email", "")).lower() == USER["email"].lower()
+                                                   or norm(r.get("to_name", "")) in MY_NAMES)]
+        mine = [r for r in mine_all if r.get("status") in ("Mở", "Đã bổ sung")
+                and (not toks or any(t in norm(f"{r.get('store', '')} {r.get('plan', '')}") for t in toks))]
+        Pq = token_filter(P, ["store", "Tên Plan"], fq)
+        need = Pq[Pq["Bị từ chối"] | Pq["_st"].eq("NOT_FIELD")]
+        req_df = pd.DataFrame([{"Mã YC": r.get("id"), "Gửi lúc": r.get("created"), "Trạng thái": r.get("status"),
+                                "Mã cửa hàng": r.get("store"), "Nghiệp vụ": r.get("kind"), "Hạng mục": r.get("item"),
+                                "Lead": r.get("from_lead"), "Nội dung": r.get("message"), "Ghi chú QC": r.get("reason"),
+                                "Phản hồi của tôi": r.get("field_reply"), "Bổ sung lúc": r.get("done_at"),
+                                "Tên plan": r.get("plan")} for r in mine_all],
+                              columns=["Mã YC", "Gửi lúc", "Trạng thái", "Mã cửa hàng", "Nghiệp vụ", "Hạng mục", "Lead", "Nội dung",
+                                       "Ghi chú QC", "Phản hồi của tôi", "Bổ sung lúc", "Tên plan"])
+        st.download_button(f"📥 Xuất Excel – {len(need)} plan cần xử lý + yêu cầu từ Lead",
+                           data=to_excel_multi({"Cần xử lý của tôi": followup_df(need, load_requests(), my_e2m),
+                                                "Yêu cầu từ Lead": req_df}),
+                           file_name=f"viec_can_xu_ly_{stamp()}.xlsx", mime=XLSX_MIME, key="fld_dl_need")
         section("Yêu cầu bổ sung từ Lead", f"{sum(r['status'] == 'Mở' for r in mine)} yêu cầu đang chờ bạn")
         if not mine:
-            st.success("Không có yêu cầu nào từ Lead.")
+            st.success("Không có yêu cầu nào từ Lead." if not toks else "Không có yêu cầu nào khớp mã cửa hàng đã tìm.")
         for r in mine:
             with st.container(border=True):
                 st.markdown(f"**{r['store']} · {r['kind']} · {r['item']}**  \n`{r['plan']}`")
@@ -2059,7 +2324,7 @@ def field_home(P, IV, label):
                 else:
                     st.success(f"Bạn đã báo bổ sung lúc {r['done_at']} – chờ Lead xác nhận.")
         section("Plan bị từ chối / cần làm lại")
-        d = P[P["Bị từ chối"]]
+        d = Pq[Pq["Bị từ chối"]]
         if d.empty:
             st.success("Không có plan nào bị từ chối.")
         else:
@@ -2067,13 +2332,15 @@ def field_home(P, IV, label):
                                   "Lý do": d["Ghi chú QC"].replace("", "Chưa có ghi chú QC")}), height=260,
                     column_config={"Lý do": st.column_config.TextColumn(width="large")})
         section("Plan chưa làm xong")
-        d = P[P["_st"] == "NOT_FIELD"]
+        d = Pq[Pq["_st"] == "NOT_FIELD"]
         if d.empty:
             st.success("Bạn không còn plan nào chưa làm.")
         else:
             show_df(pd.DataFrame({"Mã cửa hàng": d["store"], "Nghiệp vụ": d["Nghiệp vụ"], "Hạng mục": d["Hạng mục"],
                                   "Tên plan": d["Tên Plan"]}), height=260)
     with t2:
+        q2 = st.text_area("🔎 Tìm mã cửa hàng / tên plan", key="fld_q2", height=70,
+                          placeholder="Dán 1 hoặc nhiều mã cửa hàng, cách nhau bằng dấu phẩy, khoảng trắng hoặc xuống dòng")
         f1, f2 = st.columns(2)
         sel_st = f1.multiselect("Tình trạng", list(STATUS_LABEL.values()), default=[], key="fld_status")
         sel_kind = f2.multiselect("Nghiệp vụ", sorted(P["Nghiệp vụ"].unique()), default=[], key="fld_kind")
@@ -2082,10 +2349,14 @@ def field_home(P, IV, label):
             d = d[d["_st"].map(STATUS_LABEL).isin(sel_st)]
         if sel_kind:
             d = d[d["Nghiệp vụ"].isin(sel_kind)]
-        d = text_filter(d, ["store", "Tên Plan"], search)
+        d = text_filter(token_filter(d, ["store", "Tên Plan"], q2), ["store", "Tên Plan"], search)
+        st.caption(f"Đang hiển thị {len(d)} / {len(P)} plan")
         show_df(pd.DataFrame({"Nghiệp vụ": d["Nghiệp vụ"], "Mã cửa hàng": d["store"], "Hạng mục": d["Hạng mục"],
                               "Tên plan": d["Tên Plan"], "Tình trạng": d["_st"].map(STATUS_LABEL),
                               "Ghi chú QC": d["Ghi chú QC"]}), height=480)
+        st.download_button(f"📥 Xuất Excel – {len(d)} plan đang hiển thị",
+                           data=to_excel_multi({"Plan của tôi": followup_df(d, load_requests(), my_e2m)}),
+                           file_name=f"plan_cua_toi_{stamp()}.xlsx", mime=XLSX_MIME, key="fld_dl_all")
     with t3:
         if IV is None or IV.empty:
             st.info("Bạn chưa có bài phỏng vấn Plus nào được chấm.")
@@ -2103,9 +2374,10 @@ def tab_accounts(P):
     if users.empty:
         st.warning("Chưa có file users.csv nên chưa bật đăng nhập: bất kỳ ai có link đều thấy toàn bộ dữ liệu.")
         return
-    live = USERS_LIVE.exists()
-    st.info("Đang dùng bản chỉnh sửa lưu trên máy chủ." if live else
-            "Đang dùng file users.csv trên GitHub. Khi bạn bấm Lưu, thay đổi được lưu trên máy chủ và có hiệu lực ngay.")
+    src = users_source()
+    st.info("Đang dùng bản chỉnh sửa lưu trên máy chủ." if src is USERS_LIVE else
+            "Đang dùng file users.csv trên GitHub. Khi bạn bấm Lưu, thay đổi được lưu trên máy chủ và có hiệu lực ngay." if src is not None else
+            "Đang dùng danh sách tài khoản tích hợp sẵn trong app (chưa thấy users.csv trên GitHub). Khi bạn bấm Lưu, thay đổi được lưu trên máy chủ và có hiệu lực ngay.")
     st.warning("Bản chỉnh sửa lưu trên máy chủ sẽ mất khi app khởi động lại. Sau khi sửa xong, bấm **Tải users.csv** "
                "bên dưới và upload lên GitHub (ghi đè users.csv) để giữ lâu dài.")
     msg = st.session_state.pop("acct_msg", None)
@@ -2183,6 +2455,137 @@ def tab_accounts(P):
         show_df(miss.rename_axis("Tên (không dấu)").reset_index(name="Số plan"), height=260)
 
 
+def qc_group(nv, ht):
+    if nv == "Trade":
+        return "Trade DTV" if ht == "DTV" else "Trade CPS (CellphoneS)"
+    if nv == "Plus":
+        return "Audit Plus"
+    return "Mystery CAMPUS" if ht == "CAMPUS" else "Mystery CPS"
+
+
+AGE_BINS = [-1, 1, 3, 7, 10_000]
+AGE_LABELS = ["0–1 ngày", "2–3 ngày", "4–7 ngày", "Trên 7 ngày"]
+QC_COLORS = {"Đã duyệt": "#12b76a", "Từ chối": "#f04438", "Chưa chấm": "#f79009"}
+
+
+def tab_qc(P):
+    P = need_cols(P.copy(), {"auditor": "", "QM": "NONE", "Chờ QM": False, "th_date": pd.NaT})
+    f = P[P["Field done"]].copy()
+    if f.empty:
+        st.info("Chưa có plan nào Field xong nên chưa có gì để QC.")
+        return
+    ref = P["Ngày update"].max()
+    if pd.isna(ref):
+        ref = pd.Timestamp.now().normalize()
+    f["th_date"] = pd.to_datetime(f["th_date"], errors="coerce")
+    f["Nhóm"] = [qc_group(a, b) for a, b in zip(f["Nghiệp vụ"], f["Hệ thống"])]
+    f["QC viên"] = f["auditor"].replace("", "(chưa giao QC viên)")
+    f["t1"] = np.select([f["QC"].eq("DONE"), f["Bị từ chối"]], ["Đã duyệt", "Từ chối"], "Chưa chấm")
+    f["Tồn (ngày)"] = (ref.normalize() - f["th_date"]).dt.days.clip(lower=0)
+    f["Quản lý chờ"] = f["Chờ QM"].astype(bool)
+    st.caption(f"Số liệu tính đến {ref:%d/%m/%Y} (ngày cập nhật mới nhất trong file raw). "
+               "QC viên = cấp chấm đầu; QC Manager = cấp duyệt thứ hai (chỉ tính plan QC viên đã duyệt xong). "
+               "'Tồn' = số ngày từ lúc Field thực hiện đến ngày số liệu.")
+    n, d, r = len(f), int((f["t1"] == "Đã duyệt").sum()), int((f["t1"] == "Từ chối").sum())
+    w, qw = int((f["t1"] == "Chưa chấm").sum()), int(f["Quản lý chờ"].sum())
+    cards = [kpi_card("Plan Field đã xong", n, "cần QC chấm"),
+             kpi_card("QC viên đã xử lý", f"{d + r}/{n}", f"duyệt {d} · từ chối {r}", pct(d + r, n)),
+             kpi_card("QC viên CHƯA CHẤM", w, "plan chờ QC viên", None, bad=True),
+             kpi_card("QC Manager chưa duyệt", qw, "plan QC viên đã duyệt, chờ Manager", None, bad=True),
+             kpi_card("Tồn lâu nhất", f"{int(f.loc[f['t1'] == 'Chưa chấm', 'Tồn (ngày)'].max() or 0) if w else 0} ngày",
+                      "plan chờ QC viên lâu nhất")]
+    st.markdown('<div class="kpi-row">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+
+    def summarize(g):
+        gw = g[g["t1"] == "Chưa chấm"]
+        done_ = int((g["t1"] == "Đã duyệt").sum())
+        rej_ = int((g["t1"] == "Từ chối").sum())
+        return pd.Series({
+            "Field xong": len(g), "QC viên – đã duyệt": done_, "QC viên – từ chối": rej_, "QC viên – CHƯA CHẤM": len(gw),
+            "% QC viên đã xử lý": pct(done_ + rej_, len(g)),
+            "QC Manager – đã duyệt": int((g["QC"].eq("DONE") & g["QM"].eq("DONE")).sum()),
+            "QC Manager – chưa duyệt": int(g["Quản lý chờ"].sum()),
+            "Tồn lâu nhất (ngày)": int(gw["Tồn (ngày)"].max()) if len(gw) and gw["Tồn (ngày)"].notna().any() else 0,
+            "Tồn trung bình (ngày)": round(float(gw["Tồn (ngày)"].mean()), 1) if len(gw) and gw["Tồn (ngày)"].notna().any() else 0.0})
+
+    order = ["Trade CPS (CellphoneS)", "Trade DTV", "Audit Plus", "Mystery CPS", "Mystery CAMPUS"]
+    by = pd.DataFrame({k: summarize(g) for k, g in f.groupby("Nhóm")}).T.reindex([o for o in order if o in set(f["Nhóm"])])
+    for c_ in by.columns:
+        by[c_] = pd.to_numeric(by[c_])
+    tot = summarize(f).to_frame("TỔNG CỘNG").T
+    by_show = pd.concat([by, tot]).rename_axis("Nghiệp vụ").reset_index()
+    for c_ in ["Field xong", "QC viên – đã duyệt", "QC viên – từ chối", "QC viên – CHƯA CHẤM", "QC Manager – đã duyệt",
+               "QC Manager – chưa duyệt", "Tồn lâu nhất (ngày)"]:
+        by_show[c_] = pd.to_numeric(by_show[c_]).astype(int)
+    section("QC chưa chấm theo từng nghiệp vụ")
+    show_df(by_show, column_config=PCT_CFG(["% QC viên đã xử lý"]))
+
+    a, b = st.columns(2)
+    with a:
+        ch = by.rename_axis("Nhóm").reset_index()[["Nhóm", "QC viên – đã duyệt", "QC viên – từ chối", "QC viên – CHƯA CHẤM"]].rename(columns={
+            "QC viên – đã duyệt": "Đã duyệt", "QC viên – từ chối": "Từ chối", "QC viên – CHƯA CHẤM": "Chưa chấm"})
+        bar_chart(ch, "Nhóm", ["Đã duyệt", "Từ chối", "Chưa chấm"], "QC viên: đã duyệt / từ chối / chưa chấm", barmode="stack")
+    with b:
+        ch2 = by.rename_axis("Nhóm").reset_index()[["Nhóm", "QC viên – CHƯA CHẤM", "QC Manager – chưa duyệt"]].rename(columns={
+            "QC viên – CHƯA CHẤM": "Chờ QC viên", "QC Manager – chưa duyệt": "Chờ QC Manager"})
+        fig = px.bar(ch2, x="Nhóm", y=["Chờ QC viên", "Chờ QC Manager"], barmode="group", text_auto=True,
+                     title="Tồn đọng chờ QC theo cấp", color_discrete_map={"Chờ QC viên": "#f79009", "Chờ QC Manager": "#7a5af8"})
+        fig.update_yaxes(title_text="Số plan")
+        show_chart(fig)
+
+    wait = f[f["t1"] == "Chưa chấm"].copy()
+    if not wait.empty:
+        wait["Độ tồn"] = pd.cut(wait["Tồn (ngày)"].fillna(0), bins=AGE_BINS, labels=AGE_LABELS)
+        ag = wait.groupby(["Độ tồn", "Nhóm"], observed=False).size().reset_index(name="Số plan")
+        fig = px.bar(ag, x="Độ tồn", y="Số plan", color="Nhóm", barmode="stack", text_auto=True,
+                     title="Plan chờ QC viên theo độ tồn (ngày kể từ lúc Field thực hiện)")
+        show_chart(fig)
+
+    section("Hiệu suất từng QC viên", "Tính theo plan được giao cho từng QC viên (cột 'Tên Auditor' trong raw)")
+    proc = f[f["t1"] != "Chưa chấm"]
+    def per_qc(name, g):
+        gw = g[g["t1"] == "Chưa chấm"]
+        return {"QC viên": name, "Được giao (Field xong)": len(g), "Đã duyệt": int((g["t1"] == "Đã duyệt").sum()),
+                "Từ chối": int((g["t1"] == "Từ chối").sum()), "Chưa chấm": len(gw),
+                "% đã xử lý": pct(len(g) - len(gw), len(g)),
+                "Tồn lâu nhất (ngày)": int(gw["Tồn (ngày)"].max()) if len(gw) and gw["Tồn (ngày)"].notna().any() else 0}
+
+    q = pd.DataFrame([per_qc(k, g) for k, g in f.groupby("QC viên")])
+    spd = (proc["Ngày update"].dt.normalize() - proc["th_date"]).dt.days.clip(lower=0).groupby(proc["QC viên"]).mean().round(1)
+    q["Ngày từ Field đến cập nhật cuối (TB, ước tính)"] = q["QC viên"].map(spd)
+    q = q.sort_values("Chưa chấm", ascending=False).reset_index(drop=True)
+    show_df(q, column_config=PCT_CFG(["% đã xử lý"]))
+    bar_chart(q.melt(id_vars="QC viên", value_vars=["Đã duyệt", "Từ chối", "Chưa chấm"], var_name="Tình trạng", value_name="Số plan"),
+              "QC viên", "Số plan", "Khối lượng và tồn đọng từng QC viên", barmode="stack", color="Tình trạng",
+              color_discrete_map=QC_COLORS)
+
+    section("Danh sách plan QC viên chưa chấm", "Dùng để đôn đốc, sắp xếp theo độ tồn giảm dần")
+    c1, c2 = st.columns(2)
+    sel_g = c1.multiselect("Lọc nghiệp vụ", order, key="qc_flt_g")
+    sel_q = c2.multiselect("Lọc QC viên", sorted(wait["QC viên"].unique()), key="qc_flt_q")
+    lst = wait
+    if sel_g:
+        lst = lst[lst["Nhóm"].isin(sel_g)]
+    if sel_q:
+        lst = lst[lst["QC viên"].isin(sel_q)]
+    lst = lst.sort_values("Tồn (ngày)", ascending=False)
+    out = pd.DataFrame({"Nghiệp vụ": lst["Nhóm"], "Hạng mục": lst["Hạng mục"], "Mã cửa hàng": lst["store"], "Lead": lst["Lead"],
+                        "Tên plan": lst["Tên Plan"], "QC viên được giao": lst["QC viên"],
+                        "Ngày Field thực hiện": lst["th_date"].dt.strftime("%d/%m/%Y"), "Tồn (ngày)": lst["Tồn (ngày)"],
+                        "Trạng thái QC": lst["QC"].map(QC_LABEL)})
+    show_df(out, height=420)
+    if not out.empty:
+        dl_button(out, "QC_chua_cham", "QC_chua_cham.xlsx", "dl_qc_wait")
+    mg = f[f["Quản lý chờ"]]
+    with st.expander(f"Plan chờ QC Manager duyệt ({len(mg)})"):
+        outm = pd.DataFrame({"Nghiệp vụ": mg["Nhóm"], "Hạng mục": mg["Hạng mục"], "Mã cửa hàng": mg["store"], "Lead": mg["Lead"],
+                             "Tên plan": mg["Tên Plan"], "QC viên đã duyệt": mg["QC viên"],
+                             "Tồn (ngày)": mg["Tồn (ngày)"], "Trạng thái Manager": mg["QM"].map(QC_LABEL)}).sort_values("Tồn (ngày)", ascending=False)
+        show_df(outm, height=360)
+        if not outm.empty:
+            dl_button(outm, "QCManager_chua_duyet", "QC_Manager_chua_duyet.xlsx", "dl_qm_wait")
+
+
 # =====================================================================
 # Main
 # =====================================================================
@@ -2226,7 +2629,7 @@ def render_round(file_bytes, fname, label):
     names = ["📊 Tổng quan", "🏬 CPS – 4 hạng mục", "🏪 DTV", "➕ Plus 1–5", "🕵️ Mystery", "🎓 CAMPUS",
              "🎤 Trả bài Plus", "⚠️ Bị từ chối", "👥 Nhân sự Field", "📨 Yêu cầu bổ sung"]
     if IS_ADMIN:
-        names += ["🧪 Kiểm tra dữ liệu", "🔐 Tài khoản"]
+        names += ["📈 Hiệu suất QC", "🧪 Kiểm tra dữ liệu", "🔐 Tài khoản"]
     tabs = st.tabs(names)
     trade = P[P["Nghiệp vụ"] == "Trade"]
     with tabs[0]:
@@ -2255,8 +2658,10 @@ def render_round(file_bytes, fname, label):
         safe(tab_requests, P)
     if IS_ADMIN:
         with tabs[10]:
-            safe(tab_validation, P, bundle, label)
+            safe(tab_qc, P)
         with tabs[11]:
+            safe(tab_validation, P, bundle, label)
+        with tabs[12]:
             safe(tab_accounts, P)
 
 
