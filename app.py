@@ -23,7 +23,7 @@ import streamlit as st
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
                    layout="wide", initial_sidebar_state="expanded")
 
-APP_VERSION = "5.3.0"
+APP_VERSION = "5.4.0"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -634,8 +634,8 @@ def plan_level(df):
         extra = x["Tên Plan"].map(ser).fillna("")
         final = final.where(final.ne("") | extra.eq(""), "[" + c + "] " + extra)
     x["Ghi chú QC"] = final
-    x["Đã thực hiện"] = x["Tên Plan"].map(performed).fillna(False).astype(bool)
-    x["Ngày TH"] = x["Tên Plan"].map(th_date)
+    x["Đã thực hiện"] = x["Tên Plan"].map(performed.to_dict()).fillna(False).astype(bool)
+    x["Ngày TH"] = pd.to_datetime(x["Tên Plan"].map(th_date.to_dict()), errors="coerce")
     return x
 
 
@@ -1472,6 +1472,54 @@ def save_users(df):
         tmp.replace(USERS_LIVE)
 
 
+def base_users():
+    """Danh sách tài khoản gốc (users.csv trên GitHub hoặc bản tích hợp), không tính chỉnh sửa trên máy chủ."""
+    if USERS_FILE is not None and USERS_FILE.exists():
+        raw = USERS_FILE.read_bytes()
+    else:
+        raw = gzip.decompress(base64.b64decode("".join(_EMBEDDED_USERS.split())))
+    d = pd.read_csv(io.BytesIO(raw), dtype=str).fillna("")
+    d["key"] = d["email"].str.strip().str.lower()
+    return d
+
+
+def check_new_password(old, new, confirm):
+    """Trả về thông báo lỗi (rỗng nếu hợp lệ)."""
+    if not old or not new or not confirm:
+        return "Vui lòng nhập đủ 3 ô."
+    if new != confirm:
+        return "Mật khẩu mới nhập lại không khớp."
+    if len(new) < 8:
+        return "Mật khẩu mới phải có ít nhất 8 ký tự."
+    if not (re.search(r"[A-Za-z]", new) and re.search(r"\d", new)):
+        return "Mật khẩu mới cần có cả chữ và số."
+    if new == old:
+        return "Mật khẩu mới phải khác mật khẩu hiện tại."
+    return ""
+
+
+def change_password(email, old, new):
+    """Tự đổi mật khẩu. Trả về thông báo lỗi (rỗng nếu thành công). Khóa 15 phút sau 5 lần nhập sai mật khẩu hiện tại."""
+    key = str(email).strip().lower()
+    fails = _login_fails()
+    n, ts = fails.get("pw:" + key, (0, 0.0))
+    if n >= 5 and time.time() - ts < 900:
+        return "Đã nhập sai nhiều lần, tạm khóa đổi mật khẩu 15 phút."
+    users = load_users(users_signature()).reset_index(drop=True)
+    idx = users.index[users["key"] == key]
+    if len(idx) == 0:
+        return "Không tìm thấy tài khoản."
+    r = users.loc[idx[0]]
+    if not hmac.compare_digest(hash_pw(old, r["salt"]), r["hash"]):
+        fails["pw:" + key] = ((n + 1) if time.time() - ts < 900 else 1, time.time())
+        return "Mật khẩu hiện tại không đúng."
+    fails.pop("pw:" + key, None)
+    salt = secrets.token_hex(16)
+    users.loc[idx[0], "salt"], users.loc[idx[0], "hash"] = salt, hash_pw(new, salt)
+    save_users(users)
+    return ""
+
+
 def pw_xlsx_bytes(rows):
     buf = io.BytesIO()
     pd.DataFrame(rows).to_excel(buf, index=False)
@@ -1525,6 +1573,18 @@ with st.sidebar:
         if st.button("Đăng xuất", key="logout"):
             st.session_state.pop("user", None)
             st.rerun()
+        with st.expander("🔑 Đổi mật khẩu"):
+            with st.form("pw_form", clear_on_submit=True):
+                p_old = st.text_input("Mật khẩu hiện tại", type="password", key="pw_old")
+                p_new = st.text_input("Mật khẩu mới (từ 8 ký tự, có chữ và số)", type="password", key="pw_new")
+                p_cf = st.text_input("Nhập lại mật khẩu mới", type="password", key="pw_cf")
+                go_pw = st.form_submit_button("Đổi mật khẩu")
+            if go_pw:
+                err_pw = check_new_password(p_old, p_new, p_cf) or change_password(USER["email"], p_old, p_new)
+                if err_pw:
+                    st.error(err_pw)
+                else:
+                    st.success("Đã đổi mật khẩu. Lần đăng nhập sau dùng mật khẩu mới.")
     else:
         st.markdown(chip("⚠️ Chưa bật đăng nhập (thiếu users.csv)", "warn"), unsafe_allow_html=True)
     st.markdown('<div class="sbt">Chế độ xem</div>', unsafe_allow_html=True)
@@ -2380,6 +2440,11 @@ def tab_accounts(P):
             "Đang dùng danh sách tài khoản tích hợp sẵn trong app (chưa thấy users.csv trên GitHub). Khi bạn bấm Lưu, thay đổi được lưu trên máy chủ và có hiệu lực ngay.")
     st.warning("Bản chỉnh sửa lưu trên máy chủ sẽ mất khi app khởi động lại. Sau khi sửa xong, bấm **Tải users.csv** "
                "bên dưới và upload lên GitHub (ghi đè users.csv) để giữ lâu dài.")
+    base = base_users().set_index("key")["hash"].to_dict()
+    changed = [e for e, k, h in zip(users["email"], users["key"], users["hash"]) if base.get(k) != h]
+    if changed:
+        st.error(f"{len(changed)} tài khoản đang có mật khẩu/thông tin khác bản gốc trên GitHub (do nhân viên tự đổi mật khẩu hoặc admin chỉnh sửa). "
+                 "Các thay đổi này **mất khi app khởi động lại**: hãy bấm **📥 Tải users.csv hiện tại** ở dưới rồi upload ghi đè `users.csv` lên GitHub.")
     msg = st.session_state.pop("acct_msg", None)
     if msg:
         st.success(msg)
