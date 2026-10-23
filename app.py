@@ -23,7 +23,7 @@ import streamlit as st
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
                    layout="wide", initial_sidebar_state="auto")
 
-APP_VERSION = "5.6.0"
+APP_VERSION = "6.0.0"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -221,7 +221,7 @@ def _cell_style(v):
         return ""
     if v.startswith("✅") or v == "ĐẠT":
         return "background-color:#ecfdf3;color:#067647;font-weight:600"
-    if v.startswith("❌") or v.startswith("CHƯA ĐẠT") or v.startswith("🚨"):
+    if v.startswith("❌") or v.startswith("CHƯA ĐẠT") or v.startswith("🚨") or v.startswith("⏰"):
         return "background-color:#fef3f2;color:#b42318;font-weight:600"
     if v.startswith("🕓"):
         return "background-color:#fffaeb;color:#b54708;font-weight:600"
@@ -381,7 +381,7 @@ def find_file(name):
 DATA_DIR = Path(__file__).parent / "data"
 STORE_FILE = find_file("store_master.csv")
 _EMBEDDED_STORES = """
-H4sIAMeB12oC/71dW28jR3Z+z69o7EsShD3T1fd+7ItXLbDZokYtQn5kFMMkHFHCWFxEebJjBJvAMTIDJ9lsFkFGoxib8XrisWcW
+H4sIAEC62moC/71dW28jR3Z+z69o7EsShD3T1fd+7ItXLbDZokYtQn5kFMMkHFHCWFxEebJjBJvAMTIDJ9lsFkFGoxib8XrisWcW
 wUhY+IHK/A/ml+Scqm6yuruKZPMyDy2JVRT7Y9Wpcz+nO5Mb5XR697KvDCbPRh+34undL5XLwfTuKbzoDKd3n49a90+md1/2lVMY
 /fvSm4+Gf/2R8ung/KLVHoyVX0zvfjhtJR/1/6LVufr08qPHV61E/6Owe6QG0bGa+ccqsewoc0ynBYOtzv707rNUSf1O62dHcD8F
 ZpX7p+9eTe/+ffSxcv8kU/CtyvT2Py8U0lK6g2IqmHw3Gijhu+uWkiGQgXKBgBXA/rUSDiYvlc5wNPhZK2yVR1rZ4+ntb0dK9ngM
@@ -433,39 +433,39 @@ PnxgSiEVwQETST08d2Jh9wA+9CqnoXLacdQo7RgBfND2VVP3ElHHB69U5jwn4g/6SptLS10HAh+pTg/U
 1iLCr84CLHNEH9KAhuBQAa9IMbRJIxnFC6QZatgPMRegfLJzMES346wjQAMT7KhmlCV2mGFdcQxEQySa1ga3t7W0nckWA2bnlJnH
 dTP0U/BA2NGkGrh8UYJGqAyihXsyUDBJTwK67oDiryrFj9w4d/+jle9PD4puJ8mhdFVgZxKmdZ3TJPlq2mCeRPr1NmiE9sggYSIA
 oxMl9A/QJPwXNBG/wC34p3RP8dMYv/tn+Pn/uk/daqvcLDqml50mgeybazqIac2kP3z8yVWLJLkT+M+ntz+Uz0ybnkam3HRZ3wKk
-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
-4jQ53eQmAujPv9oczv8DQLcHxQp9AAA=
+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
+LE6T001uIoD+/KvN4fw/1MsjvQp9AAA=
 """
 STORE_COLS = ["Mã cửa hàng", "Hệ thống", "Miền", "Địa chỉ cửa hàng", "Lead", "Mystery", "L2"]
 
@@ -1133,141 +1133,165 @@ def split_notices(IVc):
     return wrong, low
 
 
-def _notices_body(wrong, low):
+def _notices_body(wrong, low, over, unres):
+    parts = []
+    if len(unres):
+        parts.append((f"🧭 Chưa rõ Lead ({len(unres)})", "unres"))
+    if len(over):
+        parts.append((f"⏰ Quá hạn bổ sung ({len(over)})", "over"))
     if len(wrong):
-        st.error(f"🚨 {len(wrong)} bài Plus phỏng vấn SAI ĐỐI TƯỢNG. Chỉ nhận bài của nhân viên bán hàng, "
-                 "trưởng/quản lý cửa hàng, trợ lý cửa hàng và các vị trí AIO.")
-        t = alert_table(wrong)
-        show_df(t, height=min(60 + 36 * len(t), 300))
-        dl_button(t, "Sai_doi_tuong", "Bai_Plus_sai_doi_tuong.xlsx", "dl_alert_dialog")
+        parts.append((f"🚨 Sai đối tượng ({len(wrong)})", "wrong"))
     if len(low):
-        st.warning(f"⚠️ {len(low)} nhân viên phỏng vấn dưới {THR}% điểm: cần follow và trả bài ở kỳ tiếp theo.")
-        t2 = low_table(low)
-        show_df(t2, height=min(60 + 36 * len(t2), 300),
-                column_config={"% điểm": st.column_config.NumberColumn(format="%.1f%%")})
-        dl_button(t2, "Duoi_nguong_can_follow", "Nhan_vien_duoi_nguong_can_follow.xlsx", "dl_low_dialog")
+        parts.append((f"⚠️ Dưới {THR}% ({len(low)})", "low"))
+    if not parts:
+        return
+    e2m = name_email_map() if AUTH_ON else {}
+    for tb, (_, kind) in zip(st.tabs([p[0] for p in parts]), parts):
+        with tb:
+            if kind == "unres":
+                st.error(f"🧭 {len(unres)} cửa hàng chưa xác định rõ Lead. Chọn đúng Lead (tên và email) rồi lưu để cửa hàng "
+                         "hiện đủ ở dashboard của Lead đó.")
+                assign_unresolved_ui(unres, "dlg")
+            elif kind == "over":
+                st.error(f"⏰ {len(over)} plan bị từ chối quá {OVERDUE_DAYS} ngày chưa bổ sung (tính từ ngày update trong raw). "
+                         "Field cần bổ sung ngay, Lead follow; Quản trị theo dõi để xử lý khấu trừ phí dịch vụ.")
+                t = overdue_table(over, e2m)
+                show_df(t, height=min(60 + 36 * len(t), 320), column_config={"Lý do từ chối": st.column_config.TextColumn(width="large")})
+                dl_button(t, "Qua_han_bo_sung", f"Plan_qua_han_bo_sung_{stamp()}.xlsx", "dl_over_dialog")
+            elif kind == "wrong":
+                st.error(f"🚨 {len(wrong)} bài Plus phỏng vấn SAI ĐỐI TƯỢNG. Chỉ nhận bài của nhân viên bán hàng, "
+                         "trưởng/quản lý cửa hàng, trợ lý cửa hàng và các vị trí AIO.")
+                t = alert_table(wrong)
+                show_df(t, height=min(60 + 36 * len(t), 300))
+                dl_button(t, "Sai_doi_tuong", "Bai_Plus_sai_doi_tuong.xlsx", "dl_alert_dialog")
+            else:
+                st.warning(f"⚠️ {len(low)} nhân viên phỏng vấn dưới {THR}% điểm: cần follow và trả bài ở kỳ tiếp theo.")
+                t2 = low_table(low)
+                show_df(t2, height=min(60 + 36 * len(t2), 300),
+                        column_config={"% điểm": st.column_config.NumberColumn(format="%.1f%%")})
+                dl_button(t2, "Duoi_nguong_can_follow", "Nhan_vien_duoi_nguong_can_follow.xlsx", "dl_low_dialog")
 
 
 show_notices = _dialog("🔔 Thông báo cần xử lý", width="large")(_notices_body) if _dialog else None
 
 
-def bell(wrong, low, tag):
-    """Chuông thông báo: đỏ nhấp nháy khi có bài sai đối tượng, cam khi chỉ có nhân viên dưới ngưỡng cần follow.
-    Chỉ hiện nội dung liên quan tới người đăng nhập (admin thấy toàn bộ). Tự bật popup 1 lần khi có thông báo mới."""
-    n1, n2 = len(wrong), len(low)
-    if n1 and n2:
-        label = f"🔔 {n1} sai đối tượng · {n2} dưới {THR}%"
-    elif n1:
-        label = f"🔔 {n1} bài sai đối tượng"
-    elif n2:
-        label = f"🔔 {n2} nhân viên dưới {THR}% cần follow"
-    else:
-        label = "🔔 Không có thông báo"
-    clicked = st.button(label, key="bell_alert" if n1 else "bell_warn" if n2 else "bell_ok",
-                        help="Thông báo: bài phỏng vấn sai đối tượng, nhân viên phỏng vấn dưới ngưỡng cần follow")
-    sig = f"{tag}|{n1}|{n2}"
-    auto = (n1 + n2) > 0 and st.session_state.get("bell_seen") != sig
+def bell(wrong, low, over, unres, tag):
+    """Chuông thông báo (góc trên bên phải). Đỏ nhấp nháy khi có việc khẩn (chưa rõ Lead, quá hạn bổ sung, sai đối tượng),
+    cam khi chỉ có nhân viên dưới ngưỡng cần follow. Mỗi người chỉ thấy phần liên quan; admin thấy toàn bộ.
+    Tự bật popup 1 lần khi có thông báo mới."""
+    n = {"unres": len(unres), "over": len(over), "wrong": len(wrong), "low": len(low)}
+    total = sum(n.values())
+    txt = {"unres": f"{n['unres']} chưa rõ Lead", "over": f"{n['over']} quá hạn bổ sung",
+           "wrong": f"{n['wrong']} sai đối tượng", "low": f"{n['low']} dưới {THR}%"}
+    parts = [txt[k] for k in ("unres", "over", "wrong", "low") if n[k]]
+    label = "🔔 Không có thông báo" if not total else ("🔔 " + " · ".join(parts) if len(parts) <= 2 else f"🔔 {total} thông báo")
+    urgent = n["unres"] or n["over"] or n["wrong"]
+    clicked = st.button(label, key="bell_alert" if urgent else "bell_warn" if n["low"] else "bell_ok",
+                        help="; ".join(parts) if parts else "Không có thông báo")
+    sig = f"{tag}|{n['unres']}|{n['over']}|{n['wrong']}|{n['low']}"
+    auto = total > 0 and st.session_state.get("bell_seen") != sig
     if auto:
         st.session_state["bell_seen"] = sig
-    if (n1 + n2) and (clicked or auto):
+    if total and (clicked or auto):
         if show_notices:
-            show_notices(wrong, low)
+            show_notices(wrong, low, over, unres)
         else:
-            _notices_body(wrong, low)
+            _notices_body(wrong, low, over, unres)
 
 
 # =====================================================================
 # Đăng nhập và phân quyền (admin / lead / field)
 # =====================================================================
 _EMBEDDED_USERS = """
-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
-OAAA
+H4sIAEC62moC/62b24qc2XXH7/MU9QCfwz4f7jI9ChaMpq2JG5G7sI/qzoxaZkYdEPSNMSEXxuDgixBCYA6EMCaDHccmWLrwRSt+
+j36T/FZ16dhfdSvBo9Ghq3ZVrb33Wv/D2rvGo3Ly2fL548/G0k+++NFn5enfnJZHY/lslL7Mk/FZ3/78xfJF+ezJcly+OF5Ke3Ly
+d+PPSn90crpc/fnJ2eWzb043Tz6/fP7TTWdQfVw+78uy6JFTVGU2HVyNWUUVfeipzFKLqa4ss8zk9RiuVK3DVC1612xQ1rvQXXUu
+2cjAmpuJuvmkcp92dGuDtnnavOg/k1AfffoXD2Umf94eP7qK/fDhxW83R8T1b6ebDyW64/d8qKRch/cxFOVMbjpFo3zOSZsSTOtx
+6c6Z1IKeKY86ejNjpGZ9tl1ZrWqKdnaTh3Z15tBnjCUWq3UfPiU/dHoZ8pN3Q37x88vn/7T55KycPtwcnVw++8Ppez4UTIixmx4U
+y1qGSWF0XUcp1fac8lxiMy716KOfygSvda5Th1J7621qF2bJkd8plGZbNyUGP7WxbcwadM39Zcj13ZAf/M+3m7uPL7482RyWRzf+
+ZLS2KvviShqmRauS8bHG7nNIOYax+NKtcSyVU8E6Ym/aqzTGNL0T/0ghpzlScWq6pFlRG4vurnSWOJAmxHjcHpl3Izz6/PLZv59u
+jj4/Y70OHx6/+La892M9KYmnGGWy9ZOtzMY0Rz66qvzoi69+xOFr8orPminZlPWwTDSM2XiE0EgVX1XIQ+XURp2juVgV85pJEfPB
+nZPT4zeC3tbccu/il5ujY6mmw4eXz3/WNnfOnl78cnXz9ww9P7j4j9Pjjbzgp2R18ErKrA5lrJ7DuEziJq3JGLa7tqVnx/xmCy2O
+mUtgYiXzK7oSQjAzltLNnLrFVrIamh1hAtVSmrrUWpjK3R8dPz59aK5P5vLZVyebBy9+crq5e3L5/Cfr07g2aLZuS5nTJ1LWK1un
+q9RfY0eM0TEsU5XcfU/ZRUoWPEhmOHYseDOtBjg6Y7012aQxbR9J21ZM8cVnZZuOhHx0+PDs6Ti9HvOLn198+Xjz12cXX59u7vzx
+15fPvzp9uF6NK+MigdeefAo2gWcVuDCh6NCsmiaMuIw0t1OJw8UhqeG1DT3oXGwOVSDSppKCSbn1MZqmCKp2PCCZb7on8vtHx4+v
+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
 """
 
 USERS_FILE = find_file("users.csv")
@@ -1341,6 +1365,115 @@ def verify_login(email, pw):
     return None, "Sai tài khoản hoặc mật khẩu."
 
 
+LOGIN_FILE = DATA_DIR / "login_log.json"
+ONLINE_MIN = 15  # coi là "đang online" nếu có hoạt động trong ngần này phút
+
+
+@st.cache_resource
+def _log_lock():
+    return threading.Lock()
+
+
+def _now_iso():
+    return pd.Timestamp.now(tz="Asia/Ho_Chi_Minh").isoformat(timespec="seconds")
+
+
+def load_login_log():
+    try:
+        return json.loads(LOGIN_FILE.read_text("utf-8")) if LOGIN_FILE.exists() else {"users": {}, "events": []}
+    except Exception:  # noqa: BLE001
+        return {"users": {}, "events": []}
+
+
+def _save_login_log(d):
+    DATA_DIR.mkdir(exist_ok=True)
+    tmp = LOGIN_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, ensure_ascii=False), "utf-8")
+    tmp.replace(LOGIN_FILE)
+
+
+def record_login(email, role=""):
+    """Ghi nhận một lần đăng nhập thành công."""
+    now, key = _now_iso(), str(email).strip().lower()
+    try:
+        with _log_lock():
+            d = load_login_log()
+            u = d["users"].setdefault(key, {"count": 0, "first": now, "last": "", "last_seen": ""})
+            u["count"] = int(u.get("count", 0)) + 1
+            u["first"] = u.get("first") or now
+            u["last"] = u["last_seen"] = now
+            d["events"] = (d.get("events", []) + [{"email": email, "role": role, "time": now}])[-2000:]
+            _save_login_log(d)
+    except OSError:
+        pass
+
+
+def touch_seen(email):
+    """Cập nhật 'hoạt động gần nhất' (tối đa 1 lần / phút / phiên) để biết ai đang online."""
+    t = time.time()
+    if t - st.session_state.get("_seen_ts", 0) < 60:
+        return
+    st.session_state["_seen_ts"] = t
+    key = str(email).strip().lower()
+    try:
+        with _log_lock():
+            d = load_login_log()
+            u = d["users"].setdefault(key, {"count": 0, "first": "", "last": "", "last_seen": ""})
+            u["last_seen"] = _now_iso()
+            _save_login_log(d)
+    except OSError:
+        pass
+
+
+def merge_login_log(csv_bytes):
+    """Nạp lại lịch sử đăng nhập đã tải trước đó (CSV: email,count,first,last,last_seen). Trả về số tài khoản đã gộp."""
+    df = pd.read_csv(io.BytesIO(csv_bytes), dtype=str).fillna("")
+    n = 0
+    with _log_lock():
+        d = load_login_log()
+        for _, r in df.iterrows():
+            key = str(r.get("email", "")).strip().lower()
+            if not key:
+                continue
+            u = d["users"].setdefault(key, {"count": 0, "first": "", "last": "", "last_seen": ""})
+            u["count"] = max(int(u.get("count", 0)), int(float(r.get("count") or 0)))
+            firsts = [x for x in (u.get("first"), r.get("first")) if x]
+            u["first"] = min(firsts) if firsts else ""
+            u["last"] = max([x for x in (u.get("last"), r.get("last")) if x] or [""])
+            u["last_seen"] = max([x for x in (u.get("last_seen"), r.get("last_seen")) if x] or [""])
+            n += 1
+        _save_login_log(d)
+    return n
+
+
+def login_log_csv():
+    d = load_login_log()
+    rows = [{"email": k, "count": v.get("count", 0), "first": v.get("first", ""), "last": v.get("last", ""),
+             "last_seen": v.get("last_seen", "")} for k, v in d["users"].items()]
+    return pd.DataFrame(rows, columns=["email", "count", "first", "last", "last_seen"]).to_csv(index=False).encode("utf-8")
+
+
+def fmt_ts(s):
+    try:
+        return pd.Timestamp(s).strftime("%d/%m/%Y %H:%M") if s else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def login_state(u, now=None):
+    """Trả về (nhãn, đã đăng nhập?, đang online?) từ bản ghi đăng nhập của một tài khoản."""
+    u = u or {}
+    now = now or pd.Timestamp.now(tz="Asia/Ho_Chi_Minh")
+    ever = int(u.get("count", 0) or 0) > 0 or bool(u.get("last_seen"))
+    online = False
+    if u.get("last_seen"):
+        try:
+            online = (now - pd.Timestamp(u["last_seen"])).total_seconds() <= ONLINE_MIN * 60
+        except Exception:  # noqa: BLE001
+            online = False
+    return ("🟢 Đang online" if online else "✅ Đã đăng nhập" if ever else "⚪ Chưa đăng nhập"), ever, online
+
+
 def login_screen():
     st.markdown('<div class="brand" style="justify-content:center;margin-top:60px"><div class="logo">C</div><div>'
                 '<div class="bn">CellphoneS Audit</div><div class="bs">Đăng nhập để xem dashboard</div></div></div>',
@@ -1359,6 +1492,7 @@ def login_screen():
                 user, msg = verify_login(email, pw)
                 if user:
                     st.session_state["user"] = user
+                    record_login(user["email"], user.get("role", ""))
                     st.rerun()
                 st.error(msg)
         st.caption("Chưa có tài khoản hoặc quên mật khẩu: liên hệ quản trị dashboard.")
@@ -1378,6 +1512,7 @@ if AUTH_ON:
         st.rerun()
     USER = {k: _r.iloc[0][k] for k in ("email", "role", "display_name", "lead", "field_names")}  # cập nhật theo chỉnh sửa mới nhất
     st.session_state["user"] = USER
+    touch_seen(USER["email"])
 else:  # chưa có users.csv -> chạy chế độ mở như trước (có cảnh báo)
     USER = {"email": "", "role": "admin", "display_name": "Chưa bật đăng nhập", "lead": "", "field_names": ""}
 ROLE = USER["role"]
@@ -1465,11 +1600,19 @@ def _clean(v):
     return "" if pd.isna(v) else str(v).strip()
 
 
-def apply_user_edits(orig, edited, me_id, known_leads):
+def apply_user_edits(orig, edited, me_id, known_leads, scope=None):
     """Áp dụng bảng chỉnh sửa tài khoản. Giữ nguyên mật khẩu (salt/hash) của tài khoản cũ, cấp mật khẩu mới cho dòng mới.
     Trả về (bảng users mới | None, danh sách mật khẩu mới, danh sách lỗi)."""
     orig = orig.reset_index(drop=True)
     errors, rows, new_pw, seen, used = [], [], [], {}, {}
+    if scope is not None:  # đang lọc: các dòng ngoài bộ lọc giữ nguyên, nhưng vẫn tính để chống trùng email
+        for oid in range(len(orig)):
+            if oid not in scope:
+                o = orig.loc[oid]
+                seen[str(o["email"]).strip().lower()] = -1
+                used[oid] = (o["role"], o.get("active", "1") or "1")
+                rows.append({"email": o["email"], "role": o["role"], "display_name": o["display_name"], "lead": o["lead"],
+                             "field_names": o["field_names"], "salt": o["salt"], "hash": o["hash"], "active": o.get("active", "1") or "1"})
     for pos, r in edited.reset_index(drop=True).iterrows():
         email, role, name, lead, names = (_clean(r.get(c)) for c in ("email", "role", "display_name", "lead", "field_names"))
         if not any([email, role, name, lead, names]):
@@ -1481,7 +1624,7 @@ def apply_user_edits(orig, edited, me_id, known_leads):
             errors.append(f"{line}: tài khoản trống hoặc có khoảng trắng.")
             continue
         if key in seen:
-            errors.append(f"{line}: tài khoản '{email}' bị trùng với dòng {seen[key] + 1}.")
+            errors.append(f"{line}: tài khoản '{email}' bị trùng với một tài khoản khác.")
             continue
         seen[key] = pos
         if role not in VALID_ROLES:
@@ -1492,7 +1635,7 @@ def apply_user_edits(orig, edited, me_id, known_leads):
             continue
         oid = r.get("_id")
         base = None
-        if pd.notna(oid) and int(oid) in range(len(orig)) and int(oid) not in used:
+        if pd.notna(oid) and int(oid) in range(len(orig)) and int(oid) not in used and (scope is None or int(oid) in scope):
             base = orig.loc[int(oid)]
             used[int(oid)] = (role, active)
         if base is not None:
@@ -1598,6 +1741,59 @@ def pw_xlsx_bytes(rows):
 
 
 # =====================================================================
+# Phân luồng cửa hàng -> Lead (Admin xác nhận). Lưu data/store_lead_override.csv (hoặc store_lead_override.csv trên GitHub)
+# =====================================================================
+STORE_OVR_FILE = find_file("store_lead_override.csv")
+STORE_OVR_LIVE = DATA_DIR / "store_lead_override.csv"
+OVR_COLS = ["store", "lead", "time", "by"]
+
+
+def load_store_overrides():
+    p = STORE_OVR_LIVE if STORE_OVR_LIVE.exists() else STORE_OVR_FILE
+    if p is None or not Path(p).exists():
+        return pd.DataFrame(columns=OVR_COLS)
+    try:
+        d = pd.read_csv(p, dtype=str).fillna("")
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame(columns=OVR_COLS)
+    for c in OVR_COLS:
+        if c not in d.columns:
+            d[c] = ""
+    d["store"] = d["store"].apply(norm_code)
+    return d[d["store"] != ""].drop_duplicates("store", keep="last")[OVR_COLS].reset_index(drop=True)
+
+
+def save_store_overrides(rows, by=""):
+    """rows: [{'store':..., 'lead':...}]. Gộp vào danh sách hiện có (cửa hàng đã có thì cập nhật)."""
+    with _req_lock():
+        cur = load_store_overrides().set_index("store").to_dict("index")
+        t = now_str()
+        for r in rows:
+            cur[norm_code(r["store"])] = {"lead": r["lead"], "time": t, "by": by}
+        out = pd.DataFrame([{"store": k, **v} for k, v in cur.items()], columns=OVR_COLS)
+        DATA_DIR.mkdir(exist_ok=True)
+        tmp = STORE_OVR_LIVE.with_suffix(".tmp")
+        out.to_csv(tmp, index=False, encoding="utf-8")
+        tmp.replace(STORE_OVR_LIVE)
+
+
+def apply_store_overrides(stores, ovr, campus_kw="CAMPUS"):
+    """Áp dụng phân luồng của Admin: đổi Lead cho cửa hàng đã có, thêm cửa hàng mới (ví dụ CAMPUS) vào danh sách."""
+    if ovr is None or ovr.empty:
+        return stores
+    s = stores.copy()
+    m = ovr.set_index("store")["lead"].to_dict()
+    hit = s["Mã cửa hàng"].isin(m)
+    s.loc[hit, "Lead"] = s.loc[hit, "Mã cửa hàng"].map(m)
+    known = set(s["Mã cửa hàng"])
+    new = [{"Mã cửa hàng": c, "Hệ thống": system_of(c, "", "", campus_kw), "Miền": "", "Địa chỉ cửa hàng": "",
+            "Lead": l, "Mystery": "Không", "L2": "Không"} for c, l in m.items() if c not in known]
+    if new:
+        s = pd.concat([s, pd.DataFrame(new)], ignore_index=True).fillna("")
+    return s
+
+
+# =====================================================================
 # Sidebar
 # =====================================================================
 DATA_DIR = Path(__file__).parent / "data"
@@ -1685,10 +1881,12 @@ with st.sidebar:
     else:
         selected_leader = st.selectbox("Lead", ["Tất cả"] + leaders)
     search = st.text_input("Tìm cửa hàng / NV / MSNV", "")
-    THR, DEFAULT_MAX, ALLOWED_KW, CAMPUS_KW, u3, u4 = 80, 100, DEFAULT_ALLOWED, "CAMPUS", None, None
+    THR, DEFAULT_MAX, ALLOWED_KW, CAMPUS_KW, u3, u4, OVERDUE_DAYS = 80, 100, DEFAULT_ALLOWED, "CAMPUS", None, None, 2
     if IS_ADMIN:
         with st.expander("⚙️ Thiết lập"):
             THR = st.slider("Ngưỡng điểm trả bài (%)", 50, 100, 80, 5)
+            OVERDUE_DAYS = st.slider("Plan bị từ chối quá hạn bổ sung sau (ngày)", 1, 10, 2,
+                                     help="Plan bị từ chối mà sau ngần này ngày (tính từ ngày update trong raw) vẫn chưa bổ sung sẽ báo quá hạn tới Field, Lead và Quản trị.")
             DEFAULT_MAX = st.number_input("Điểm tối đa (khi raw thiếu 'Thang điểm')", 1, 1000, 100)
             ALLOWED_KW = st.text_input("Vị trí được phép phỏng vấn Plus (từ khóa, cách nhau bằng dấu phẩy)", DEFAULT_ALLOWED,
                                        help="Bài Plus của MSNV có vị trí không chứa từ khóa nào ở đây sẽ bị báo SAI ĐỐI TƯỢNG.")
@@ -1703,6 +1901,8 @@ with st.sidebar:
             st.warning("Không đọc được DS cửa hàng vừa nạp, dùng bảng mặc định.")
         else:
             stores = merge_flags(parsed, default_stores)
+    OVR = load_store_overrides()
+    stores = apply_store_overrides(stores, OVR, CAMPUS_KW)
     try:
         DATA_DIR.mkdir(exist_ok=True)
     except OSError:
@@ -1753,6 +1953,39 @@ def lead_filter(df):
 # =====================================================================
 # Tab renderers
 # =====================================================================
+def add_overdue(P):
+    """Thêm ngày trả về (= Ngày update trong raw), số ngày chưa bổ sung và cờ quá hạn cho plan bị từ chối.
+    Số ngày tính đến ngày dữ liệu = ngày update mới nhất trong file raw."""
+    P = P.copy()
+    upd = pd.to_datetime(P["Ngày update"], errors="coerce")
+    ref = upd.max()
+    ref = ref.normalize() if pd.notna(ref) else pd.Timestamp.now().normalize()
+    P["Ngày trả về"] = upd.dt.normalize()
+    P["Số ngày chưa bổ sung"] = (ref - P["Ngày trả về"]).dt.days.clip(lower=0).fillna(0).astype(int)
+    P["Quá hạn"] = P["Bị từ chối"] & (P["Số ngày chưa bổ sung"] > OVERDUE_DAYS)
+    P["Ngày dữ liệu"] = ref
+    return P
+
+
+def fmt_date(v):
+    return v.strftime("%d/%m/%Y") if pd.notna(v) else ""
+
+
+def overdue_table(over, e2m=None):
+    """Bảng plan bị từ chối quá hạn bổ sung (dùng cho popup và file báo cáo khấu trừ phí dịch vụ)."""
+    e2m = e2m or {}
+    o = over.sort_values("Số ngày chưa bổ sung", ascending=False)
+    return pd.DataFrame({
+        "Lead": o["Lead"].values, "Mã cửa hàng": o["store"].values, "Nghiệp vụ": o["Nghiệp vụ"].values,
+        "Hạng mục": o["Hạng mục"].values, "Tên plan": o["Tên Plan"].values,
+        "Người thực hiện": o["Field name"].apply(clean_name).values,
+        "Tài khoản": [e2m.get(norm(clean_name(x)), "") for x in o["Field name"]],
+        "Ngày trả về (Ngày update)": [fmt_date(x) for x in o["Ngày trả về"]],
+        "Số ngày chưa bổ sung": o["Số ngày chưa bổ sung"].astype(int).values,
+        f"Quá hạn (> {OVERDUE_DAYS} ngày)": (o["Số ngày chưa bổ sung"].astype(int) - OVERDUE_DAYS).values,
+        "Lý do từ chối": o["Ghi chú QC"].replace("", "Chưa có ghi chú QC").values})
+
+
 def need_cols(df, spec):
     """Đảm bảo bảng có đủ cột (tránh KeyError khi dữ liệu cũ / thiếu cột)."""
     for c, default in spec.items():
@@ -1771,7 +2004,12 @@ def safe(fn, *args, **kw):
             st.code(traceback.format_exc())
 
 
-def tab_overview(P, cps_m, dtv_m, my_m, ls, label, n_alert=0, n_low=0):
+def tab_overview(P, cps_m, dtv_m, my_m, ls, label, n_alert=0, n_low=0, n_over=0, n_unres=0):
+    if n_unres:
+        st.error(f"🧭 Có {n_unres} cửa hàng chưa xác định rõ Lead. Mở tab '🧭 Phân luồng Lead' (hoặc bấm chuông 🔔) để gán đúng Lead, "
+                 "tránh thiếu cửa hàng ở dashboard của Lead.")
+    if n_over:
+        st.error(f"⏰ Có {n_over} plan bị từ chối quá {OVERDUE_DAYS} ngày chưa bổ sung. Bấm chuông 🔔 hoặc mở tab '⚠️ Bị từ chối' để xem và follow.")
     if n_alert:
         st.error(f"🚨 Có {n_alert} bài Plus phỏng vấn SAI ĐỐI TƯỢNG. Bấm chuông 🔔 ở góc trên bên phải "
                  "hoặc mở tab 'Trả bài Plus' để xem chi tiết.")
@@ -2069,11 +2307,23 @@ def tab_reject(P, file_bytes=None, file_info=""):
     if r.empty:
         st.success("Không có plan nào bị từ chối hoặc yêu cầu bổ sung.")
         return
+    ref = P["Ngày dữ liệu"].iloc[0] if "Ngày dữ liệu" in P.columns and len(P) else pd.NaT
     n_no = int(r["Ghi chú QC"].eq("").sum())
-    c = st.columns(3)
+    over = r[r["Quá hạn"]]
+    c = st.columns(4)
     c[0].metric("Plan bị từ chối / yêu cầu bổ sung", len(r))
-    c[1].metric("Đã có ghi chú QC", len(r) - n_no)
-    c[2].metric("Chưa có ghi chú trong file raw", n_no)
+    c[1].metric(f"⏰ Quá hạn bổ sung (> {OVERDUE_DAYS} ngày)", len(over))
+    c[2].metric("Đã có ghi chú QC", len(r) - n_no)
+    c[3].metric("Chưa có ghi chú trong file raw", n_no)
+    st.caption(f"Ngày trả về = cột 'Ngày update' trong file raw. Số ngày chưa bổ sung tính đến {fmt_date(ref)} (ngày cập nhật mới nhất của file raw). "
+               f"Plan chưa bổ sung sau hơn {OVERDUE_DAYS} ngày bị báo quá hạn tới Field, Lead và Quản trị.")
+    if len(over):
+        section(f"⏰ Quá hạn bổ sung (> {OVERDUE_DAYS} ngày)", "Danh sách dùng để follow và làm căn cứ khấu trừ phí dịch vụ")
+        e2m = name_email_map() if AUTH_ON else {}
+        ot = overdue_table(over, e2m)
+        st.error(f"{len(over)} plan bị từ chối quá {OVERDUE_DAYS} ngày vẫn chưa bổ sung.")
+        show_df(ot, height=min(80 + 36 * len(ot), 360), column_config={"Lý do từ chối": st.column_config.TextColumn(width="large")})
+        dl_button(ot, "Qua_han_bo_sung", f"Plan_qua_han_bo_sung_{stamp()}.xlsx", "dl_over_tab")
     if n_no:
         st.info(f"{n_no} plan chưa có ghi chú trong file raw đang dùng ({file_info or 'file đã nạp'}). "
                 "Nếu trên hệ thống QC đã ghi chú, rất có thể file được xuất TRƯỚC khi QC ghi — hãy xuất lại và nạp file mới. "
@@ -2084,10 +2334,15 @@ def tab_reject(P, file_bytes=None, file_info=""):
                   "Plan bị từ chối theo nghiệp vụ")
     with b:
         bar_chart(r.groupby("Lead").size().reset_index(name="Số plan"), "Lead", "Số plan", "Plan bị từ chối theo Lead")
-    out = pd.DataFrame({"Nghiệp vụ": r["Nghiệp vụ"], "Lead": r["Lead"], "Mã cửa hàng": r["store"],
-                        "Hạng mục": r["Hạng mục"], "Tên plan": r["Tên Plan"],
-                        "Trạng thái QC": r["QC"].map(QC_LABEL).fillna("Khác"),
-                        "Lý do": r["Ghi chú QC"].replace("", "Chưa có ghi chú QC trong file raw")}).sort_values(["Nghiệp vụ", "Lead"])
+    rr = r.sort_values(["Quá hạn", "Số ngày chưa bổ sung"], ascending=[False, False])
+    out = pd.DataFrame({"Nghiệp vụ": rr["Nghiệp vụ"], "Lead": rr["Lead"], "Mã cửa hàng": rr["store"],
+                        "Hạng mục": rr["Hạng mục"], "Tên plan": rr["Tên Plan"],
+                        "Người thực hiện": rr["Field name"].apply(clean_name),
+                        "Trạng thái QC": rr["QC"].map(QC_LABEL).fillna("Khác"),
+                        "Ngày trả về (Ngày update)": rr["Ngày trả về"].map(fmt_date),
+                        "Số ngày chưa bổ sung": rr["Số ngày chưa bổ sung"].astype(int),
+                        "Quá hạn": np.where(rr["Quá hạn"], "⏰ Quá hạn", ""),
+                        "Lý do": rr["Ghi chú QC"].replace("", "Chưa có ghi chú QC trong file raw")})
     section("Danh sách plan bị từ chối / yêu cầu bổ sung")
     show_df(out, height=520, column_config={"Lý do": st.column_config.TextColumn(width="large")})
     dl_button(out, "Plan_bi_tu_choi", "Plan_bi_tu_choi.xlsx", "dl_rej")
@@ -2136,6 +2391,31 @@ def tab_validation(P, bundle, label):
             section("Cửa hàng có Lead trong raw khác danh sách", "App đang dùng Lead theo danh sách cửa hàng")
             show_df(diff.drop_duplicates("store")[["store", "lead_raw", "Lead"]]
                     .rename(columns={"store": "Mã cửa hàng", "lead_raw": "Lead trong raw", "Lead": "Lead theo danh sách"}))
+    # Cửa hàng nghi gán sai Lead: tất cả người thực hiện đều thuộc team của một Lead khác
+    ud = load_users(users_signature())
+    name_lead = {}
+    for _, r_ in ud[ud["role"] == "field"].iterrows():
+        for n_ in str(r_["field_names"]).split("|"):
+            if norm(n_):
+                name_lead.setdefault(norm(n_), set()).add(r_["lead"])
+    sus = []
+    pt = P[P["Nghiệp vụ"].isin(["Trade", "Plus"]) & P["Hệ thống"].isin(["CPS", "DTV"])]
+    for code_, g_ in pt.groupby("store"):
+        lds = set()
+        for n_ in g_["Field name"].fillna("").map(norm):
+            lds |= name_lead.get(n_, set())
+        lds.discard("")
+        ml = g_["Lead"].iloc[0]
+        if lds and ml not in lds:
+            sus.append({"Mã cửa hàng": code_, "Lead trong danh sách cửa hàng": ml, "Lead của người thực hiện": ", ".join(sorted(lds)),
+                        "Người thực hiện": ", ".join(sorted({clean_name(x) for x in g_["Field name"] if clean_name(x)}))})
+    section("Cửa hàng nghi gán sai Lead", "Người thực hiện thuộc team một Lead khác với Lead đang gán cho cửa hàng trong store_master.csv")
+    if sus:
+        st.warning(f"{len(sus)} cửa hàng nghi gán sai Lead: cửa hàng có thể đang nằm ở dashboard của Lead khác. "
+                   "Kiểm tra rồi sửa cột Lead trong store_master.csv (hoặc báo người hỗ trợ).")
+        show_df(pd.DataFrame(sus))
+    else:
+        st.success("Không phát hiện cửa hàng nào gán lệch Lead so với team người thực hiện.")
     miss = sorted(set(P["store"]) - set(stores["Mã cửa hàng"]))
     camp = [c for c in miss if (norm(CAMPUS_KW).upper() or "CAMPUS") in c]
     other = [c for c in miss if c not in camp]
@@ -2164,8 +2444,8 @@ def token_filter(df, cols, q):
 
 
 FOLLOW_COLS = ["STT", "Mã cửa hàng", "Địa chỉ cửa hàng", "Lead", "Nghiệp vụ", "Hạng mục", "Tên plan", "Người thực hiện",
-               "Tài khoản", "Tình trạng", "Lý do QC", "Trạng thái yêu cầu", "Nội dung yêu cầu", "Ngày gửi",
-               "Phản hồi của Field", "Ngày bổ sung"]
+               "Tài khoản", "Tình trạng", "Lý do QC", "Ngày trả về (Ngày update)", "Số ngày chưa bổ sung", "Trạng thái yêu cầu",
+               "Nội dung yêu cầu", "Ngày gửi", "Phản hồi của Field", "Ngày bổ sung"]
 
 
 def followup_df(sub, reqs, e2m):
@@ -2180,6 +2460,8 @@ def followup_df(sub, reqs, e2m):
                      "Người thực hiện": who, "Tài khoản": e2m.get(norm(who), ""),
                      "Tình trạng": STATUS_LABEL.get(r["_st"], r["_st"]),
                      "Lý do QC": r["Ghi chú QC"] or "Chưa có ghi chú QC",
+                     "Ngày trả về (Ngày update)": fmt_date(r.get("Ngày trả về")) if r["Bị từ chối"] else "",
+                     "Số ngày chưa bổ sung": int(r.get("Số ngày chưa bổ sung", 0)) if r["Bị từ chối"] else "",
                      "Trạng thái yêu cầu": q.get("status", "Chưa gửi"), "Nội dung yêu cầu": q.get("message", ""),
                      "Ngày gửi": q.get("created", ""), "Phản hồi của Field": q.get("field_reply", ""),
                      "Ngày bổ sung": q.get("done_at", "")})
@@ -2428,6 +2710,8 @@ def tab_requests(P):
         tbl = pd.DataFrame({"Chọn": bool(sel_all), "Mã cửa hàng": cand["store"], "Nghiệp vụ": cand["Nghiệp vụ"], "Hạng mục": cand["Hạng mục"],
                             "Tên plan": cand["Tên Plan"], "Người thực hiện": cand["Field name"].apply(clean_name),
                             "Tình trạng": cand["_st"].map(STATUS_LABEL),
+                            "Ngày trả về": cand["Ngày trả về"].where(cand["Bị từ chối"]).map(fmt_date),
+                            "Số ngày": cand["Số ngày chưa bổ sung"].where(cand["Bị từ chối"]),
                             "Lý do QC": cand["Ghi chú QC"].replace("", "Chưa có ghi chú QC")})
         ed = editor(tbl, disabled=[c for c in tbl.columns if c != "Chọn"], height=380,
                     key=f"req_editor_{kind}_{int(sel_all)}_{abs(hash(tuple(cand['Tên Plan']))) % 10**8}",
@@ -2533,6 +2817,10 @@ def field_home(P, P_all, IV, label):
     if P.empty:
         st.info(f"Chưa có plan nào được giao cho {me} trong đợt {label}. Nếu bạn nghĩ đây là nhầm lẫn, báo Lead hoặc quản trị.")
         return
+    n_over = int(P["Quá hạn"].sum()) if "Quá hạn" in P.columns else 0
+    if n_over:
+        st.error(f"⏰ Bạn có {n_over} plan bị từ chối quá {OVERDUE_DAYS} ngày chưa bổ sung. Hãy bổ sung ngay "
+                 "(xem tab 'Việc cần xử lý'); các trường hợp quá hạn được ghi nhận để xử lý khấu trừ phí dịch vụ.")
     sp_all = store_progress_df(P_all)
     mine = set(P[P["Nghiệp vụ"].isin(["Trade", "Plus"]) & P["Hệ thống"].isin(["CPS", "DTV"])]["store"])
     sp = sp_all[sp_all["store"].isin(mine)].reset_index(drop=True)
@@ -2553,7 +2841,7 @@ def field_home(P, P_all, IV, label):
         cards = [kpi_card("Cửa hàng được giao", n, "CPS + DTV"),
                  kpi_card("Đã hoàn thành", n_done, "đủ điều kiện", pct(n_done, n)),
                  kpi_card("Đang thực hiện", n_prog, "đã làm một phần / chờ QC"),
-                 kpi_card("Cần bổ sung", n_rej, "có plan bị từ chối", None, bad=True),
+                 kpi_card("Cần bổ sung", n_rej, "có plan bị từ chối" + (f" · {n_over} quá hạn" if n_over else ""), None, bad=True),
                  kpi_card("Chưa thực hiện", n_ns, "chưa có plan nào xong")]
         st.markdown('<div class="kpi-row compact">' + "".join(cards) + "</div>", unsafe_allow_html=True)
     else:
@@ -2612,7 +2900,11 @@ def field_home(P, P_all, IV, label):
         if d.empty:
             st.success("Không có plan nào bị từ chối.")
         else:
+            d = d.sort_values(["Quá hạn", "Số ngày chưa bổ sung"], ascending=[False, False])
             show_df(pd.DataFrame({"Mã cửa hàng": d["store"], "Hạng mục": d["Hạng mục"], "Tên plan": d["Tên Plan"],
+                                  "Ngày trả về (Ngày update)": d["Ngày trả về"].map(fmt_date),
+                                  "Số ngày chưa bổ sung": d["Số ngày chưa bổ sung"].astype(int),
+                                  "Quá hạn": np.where(d["Quá hạn"], "⏰ Quá hạn", ""),
                                   "Lý do": d["Ghi chú QC"].replace("", "Chưa có ghi chú QC")}), height=260,
                     column_config={"Lý do": st.column_config.TextColumn(width="large")})
         section("Plan chưa làm xong")
@@ -2692,12 +2984,91 @@ def tab_accounts(P):
                 st.session_state.pop("acct_pw", None)
                 st.rerun()
 
-    base = users.reset_index(drop=True)[["email", "role", "display_name", "lead", "field_names"]].copy()
-    base.insert(0, "_id", range(len(base)))
-    base.insert(3, "status", users.reset_index(drop=True)["active"].map(lambda a: "Đã khóa" if a == "0" else "Hoạt động"))
+    cnt = P["Field name"].fillna("").apply(norm).value_counts().to_dict()
+    uidx = users.reset_index(drop=True).copy()
+    uidx["_plans"] = uidx["field_names"].apply(
+        lambda s: int(sum(cnt.get(norm(x), 0) for x in str(s).split("|"))) if str(s).strip() else 0)
+    llog = load_login_log()["users"]
+    _now = pd.Timestamp.now(tz="Asia/Ho_Chi_Minh")
+    sts = [login_state(llog.get(k), _now) for k in uidx["key"]]
+    uidx["_lstate"] = [x[0] for x in sts]
+    uidx["_ever"] = [x[1] for x in sts]
+    uidx["_online"] = [x[2] for x in sts]
+    uidx["_last"] = [fmt_ts(llog.get(k, {}).get("last", "") or llog.get(k, {}).get("last_seen", "")) for k in uidx["key"]]
+    uidx["_first"] = [fmt_ts(llog.get(k, {}).get("first", "")) for k in uidx["key"]]
+    uidx["_lcount"] = [int(llog.get(k, {}).get("count", 0) or 0) for k in uidx["key"]]
     known_leads = sorted(set(stores["Lead"]) - {""}) if not stores.empty else []
-    section("Chỉnh sửa tài khoản", "Sửa trực tiếp trong bảng (đổi cột Trạng thái để khóa / mở khóa). Thêm dòng mới ở cuối bảng; chọn dòng rồi nhấn Delete để xóa tài khoản.")
-    ed = editor(base, num_rows="dynamic", height=430, key="acct_editor", column_config={
+    me_key = USER["email"].strip().lower()
+    me_rows = uidx.index[uidx["key"] == me_key].tolist()
+    me_id = int(me_rows[0]) if me_rows else None
+
+    section("Lọc tài khoản", "Lọc để tìm nhanh tài khoản cần sửa, khóa hoặc xóa. 'Có plan trong đợt này' dựa trên đợt đang chọn ở thanh bên trái.")
+    lead_opts = ["Tất cả"] + sorted({x for x in uidx["lead"] if x}) + ["(chưa gán Lead)"]
+    f1, f2, f3 = st.columns([1.3, 1.2, 1])
+    f_lead = f1.selectbox("Lead", lead_opts, key="acct_f_lead")
+    f_role = f2.multiselect("Vai trò", list(VALID_ROLES), key="acct_f_role")
+    f_stat = f3.selectbox("Trạng thái", ["Tất cả", "Hoạt động", "Đã khóa"], key="acct_f_stat")
+    f4, f5, f6 = st.columns([1.2, 1.2, 1.4])
+    f_use = f4.selectbox("Có plan trong đợt này", ["Tất cả", "Có plan", "Không có plan"], key="acct_f_use")
+    f_login = f5.selectbox("Đăng nhập", ["Tất cả", "Chưa đăng nhập", "Đã đăng nhập", "Đang online"], key="acct_f_login")
+    f_q = f6.text_input("🔎 Tìm theo email / tên", key="acct_f_q")
+    m = pd.Series(True, index=uidx.index)
+    if f_lead == "(chưa gán Lead)":
+        m &= uidx["lead"].eq("")
+    elif f_lead != "Tất cả":
+        m &= uidx["lead"].eq(f_lead)
+    if f_role:
+        m &= uidx["role"].isin(f_role)
+    if f_stat != "Tất cả":
+        m &= uidx["active"].eq("0" if f_stat == "Đã khóa" else "1")
+    if f_use == "Có plan":
+        m &= uidx["_plans"] > 0
+    elif f_use == "Không có plan":
+        m &= uidx["_plans"] == 0
+    if f_login == "Chưa đăng nhập":
+        m &= ~uidx["_ever"]
+    elif f_login == "Đã đăng nhập":
+        m &= uidx["_ever"]
+    elif f_login == "Đang online":
+        m &= uidx["_online"]
+    view_u = uidx[m]
+    if f_q.strip():
+        view_u = token_filter(view_u, ["email", "display_name"], f_q)
+    st.caption(f"Đang lọc {len(view_u)} / {len(uidx)} tài khoản")
+
+    section("Tình trạng đăng nhập", "Ai đã đăng nhập, ai chưa đăng nhập, ai đang online (hoạt động trong " + str(ONLINE_MIN) + " phút gần nhất). Áp dụng bộ lọc ở trên.")
+    n_ever, n_on = int(view_u["_ever"].sum()), int(view_u["_online"].sum())
+    lc = st.columns(3)
+    lc[0].metric("Đã đăng nhập", f"{n_ever} / {len(view_u)}")
+    lc[1].metric("Chưa đăng nhập", len(view_u) - n_ever)
+    lc[2].metric("Đang online", n_on)
+    st.caption("Lịch sử ghi từ khi bật tính năng này và lưu trên máy chủ: mất khi app khởi động lại. "
+               "Bấm 'Tải lịch sử' định kỳ; sau khi khởi động lại, nạp file đó vào ô bên dưới để khôi phục.")
+    lg = view_u.assign(**{"Trạng thái đăng nhập": view_u["_lstate"]})[
+        ["email", "display_name", "role", "lead", "Trạng thái đăng nhập", "_last", "_lcount", "_first"]].rename(columns={
+        "email": "Tài khoản", "display_name": "Tên", "role": "Vai trò", "lead": "Lead", "_last": "Lần đăng nhập gần nhất",
+        "_lcount": "Số lần đăng nhập", "_first": "Lần đầu đăng nhập"})
+    lg = lg.assign(_o=lg["Trạng thái đăng nhập"].map({"🟢 Đang online": 0, "✅ Đã đăng nhập": 1, "⚪ Chưa đăng nhập": 2})).sort_values(
+        ["_o", "Tài khoản"]).drop(columns="_o")
+    show_df(lg, height=300)
+    d1, d2, d3 = st.columns([1.2, 1.2, 2])
+    d1.download_button("📥 Xuất Excel – tình trạng đăng nhập", data=to_excel_multi({"Tình trạng đăng nhập": lg}),
+                       file_name=f"tinh_trang_dang_nhap_{stamp()}.xlsx", mime=XLSX_MIME, key="acct_login_xlsx")
+    d2.download_button("💾 Tải lịch sử (CSV)", data=login_log_csv(), file_name="login_log.csv", mime="text/csv", key="acct_login_csv")
+    up_log = d3.file_uploader("Nạp lại lịch sử đăng nhập (CSV đã tải)", type=["csv"], key="acct_login_up")
+    if up_log is not None and st.session_state.get("_log_up_name") != (up_log.name, up_log.size):
+        try:
+            st.success(f"Đã nạp lịch sử của {merge_login_log(up_log.getvalue())} tài khoản.")
+            st.session_state["_log_up_name"] = (up_log.name, up_log.size)
+        except Exception as e:  # noqa: BLE001
+            st.error(f"File không đúng định dạng: {e}")
+
+    base = view_u[["email", "role", "display_name", "lead", "field_names"]].copy()
+    base.insert(0, "_id", view_u.index)
+    base.insert(3, "status", view_u["active"].map(lambda a: "Đã khóa" if a == "0" else "Hoạt động"))
+    section("Chỉnh sửa tài khoản", "Sửa trực tiếp trong bảng (đổi cột Trạng thái để khóa / mở khóa). Thêm dòng mới ở cuối bảng; chọn dòng rồi nhấn Delete để xóa tài khoản. Chỉ các dòng đang lọc bị ảnh hưởng.")
+    sig_f = abs(hash((f_lead, tuple(f_role), f_stat, f_use, f_login, f_q))) % 10**8
+    ed = editor(base, num_rows="dynamic", height=430, key=f"acct_editor_{sig_f}", column_config={
         "_id": None,
         "email": st.column_config.TextColumn("Tài khoản (email)", required=True),
         "role": st.column_config.SelectboxColumn("Vai trò", options=list(VALID_ROLES), required=True),
@@ -2705,9 +3076,6 @@ def tab_accounts(P):
         "display_name": st.column_config.TextColumn("Tên nhân viên / tên hiển thị"),
         "lead": st.column_config.SelectboxColumn("Lead", options=[""] + known_leads),
         "field_names": st.column_config.TextColumn("Tên người thực hiện trong plan (nhiều tên cách nhau bằng |)", width="large")})
-    me_key = USER["email"].strip().lower()
-    me_rows = users.reset_index(drop=True).index[users.reset_index(drop=True)["key"] == me_key].tolist()
-    me_id = int(me_rows[0]) if me_rows else None
     b1, b2 = st.columns([1, 3])
     with b1:
         save = st.button("💾 Lưu thay đổi", type="primary", key="acct_save")
@@ -2715,7 +3083,7 @@ def tab_accounts(P):
         st.download_button("📥 Tải users.csv hiện tại (để cập nhật GitHub)", key="acct_csv_dl", file_name="users.csv",
                            data=users[USER_SAVE_COLS].to_csv(index=False).encode("utf-8"), mime="text/csv")
     if save:
-        new, new_pw, errs = apply_user_edits(users, ed, me_id, known_leads)
+        new, new_pw, errs = apply_user_edits(users, ed, me_id, known_leads, scope=set(view_u.index))
         if errs:
             for e in errs:
                 st.error(e)
@@ -2755,7 +3123,32 @@ def tab_accounts(P):
                         st.session_state["acct_msg"] = f"Đã {'khóa' if val == '0' else 'mở khóa'} {len(keys_)} tài khoản."
                         st.rerun()
 
-    cnt = P["Field name"].fillna("").apply(norm).value_counts().to_dict()
+    section("Xóa tài khoản không hoạt động", "Dùng bộ lọc ở trên (ví dụ Lead + 'Không có plan', hoặc Trạng thái 'Đã khóa') để thu hẹp danh sách, rồi chọn tài khoản cần xóa. Tài khoản đang đăng nhập không xóa được.")
+    cand = view_u[view_u["key"] != me_key]
+    st.caption(f"{len(cand)} tài khoản trong bộ lọc hiện tại có thể xóa")
+    if cand.empty:
+        st.info("Không có tài khoản nào trong bộ lọc hiện tại.")
+    else:
+        prev = cand[["email", "role", "display_name", "lead", "active", "_plans"]].rename(columns={
+            "email": "Tài khoản", "role": "Vai trò", "display_name": "Tên", "lead": "Lead", "_plans": "Số plan (đợt này)"})
+        prev["Trạng thái"] = prev.pop("active").map(lambda a: "🔒 Đã khóa" if a == "0" else "🟢 Hoạt động")
+        show_df(prev[["Tài khoản", "Vai trò", "Trạng thái", "Tên", "Lead", "Số plan (đợt này)"]], height=260)
+        sel_all = st.checkbox("Chọn tất cả tài khoản đang lọc", key="acct_del_all")
+        pick_del = st.multiselect("Tài khoản cần xóa", cand["email"].tolist(), default=cand["email"].tolist() if sel_all else [],
+                                  key=f"acct_del_pick_{int(sel_all)}_{sig_f}")
+        conf = st.checkbox(f"Tôi xác nhận xóa {len(pick_del)} tài khoản đã chọn", key=f"acct_del_conf_{len(pick_del)}")
+        if st.button("🗑️ Xóa tài khoản đã chọn", disabled=not (pick_del and conf), type="primary", key="acct_del_btn"):
+            keys_ = {p.strip().lower() for p in pick_del}
+            remaining = uidx[~uidx["key"].isin(keys_)]
+            if me_key in keys_:
+                st.error("Không thể xóa tài khoản đang đăng nhập.")
+            elif not ((remaining["role"] == "admin") & (remaining["active"] == "1")).any():
+                st.error("Phải còn ít nhất một tài khoản Quản trị đang hoạt động.")
+            else:
+                save_users(remaining)
+                st.session_state["acct_msg"] = f"Đã xóa {len(keys_)} tài khoản."
+                st.rerun()
+
     show = users.assign(**{"Số tên Field": users["field_names"].apply(lambda s: len([x for x in str(s).split("|") if x.strip()])),
                            "Số plan (đợt này)": users["field_names"].apply(
                                lambda s: int(sum(cnt.get(norm(x), 0) for x in str(s).split("|")) if str(s).strip() else 0))})
@@ -2903,6 +3296,145 @@ def tab_qc(P):
             dl_button(outm, "QCManager_chua_duyet", "QC_Manager_chua_duyet.xlsx", "dl_qm_wait")
 
 
+def lead_directory():
+    """Danh sách (tên Lead, email) lấy từ tài khoản Lead; Lead chưa có tài khoản thì email để trống."""
+    u = load_users(users_signature())
+    ld = u[(u["role"] == "lead") & (u["active"] != "0")]
+    out = [(r["lead"], r["email"]) for _, r in ld.iterrows() if r["lead"]]
+    names = {x[0] for x in out}
+    out += [(x, "") for x in sorted(set(stores["Lead"]) - {""} - names)]
+    return out
+
+
+def unresolved_stores(P, ovr):
+    """Cửa hàng chưa xác định rõ Lead: chưa có trong danh sách, chưa gán Lead, raw ghi Lead khác, hoặc người thực hiện thuộc team Lead khác."""
+    ud = load_users(users_signature())
+    name_lead = {}
+    for _, r_ in ud[ud["role"] == "field"].iterrows():
+        for n_ in str(r_["field_names"]).split("|"):
+            if norm(n_):
+                name_lead.setdefault(norm(n_), set()).add(r_["Lead"] if "Lead" in r_ else r_["lead"])
+    known = set(stores["Mã cửa hàng"])
+    confirmed = set(ovr["store"]) if ovr is not None and not ovr.empty else set()
+    rows = []
+    for code, g in P.groupby("store"):
+        if not code or code in confirmed:
+            continue
+        assigned = g["Lead"].iloc[0]
+        raw = sorted({x for x in g["lead_raw"] if x})
+        team = set()
+        for n_ in g["Field name"].fillna("").map(norm):
+            team |= name_lead.get(n_, set())
+        team.discard("")
+        reasons = []
+        if code not in known:
+            reasons.append("Chưa có trong danh sách cửa hàng")
+        if assigned in ("", "Chưa gán"):
+            reasons.append("Chưa gán Lead")
+        if raw and assigned not in raw:
+            reasons.append("Raw ghi Lead: " + ", ".join(raw))
+        if team and assigned not in team:
+            reasons.append("Người thực hiện thuộc team: " + ", ".join(sorted(team)))
+        if not reasons:
+            continue
+        if code in known:  # cửa hàng đã có trong danh sách: ưu tiên team người thực hiện, rồi Lead đang gán, rồi raw
+            sug = sorted(team)[0] if len(team) == 1 else (assigned if assigned not in ("", "Chưa gán") else (raw[0] if len(raw) == 1 else ""))
+        else:  # cửa hàng mới (ví dụ CAMPUS): ưu tiên Lead ghi trong raw, rồi team người thực hiện
+            sug = raw[0] if len(raw) == 1 else (sorted(team)[0] if len(team) == 1 else "")
+        rows.append({"store": code, "Hệ thống": g["Hệ thống"].iloc[0], "Lý do": " · ".join(reasons), "Lead hiện tại": assigned,
+                     "Lead theo raw": ", ".join(raw), "Lead theo team": ", ".join(sorted(team)), "Gợi ý": sug,
+                     "Số plan": len(g), "Người thực hiện": ", ".join(sorted({clean_name(x) for x in g["Field name"] if clean_name(x)})[:3])})
+    return pd.DataFrame(rows, columns=["store", "Hệ thống", "Lý do", "Lead hiện tại", "Lead theo raw", "Lead theo team", "Gợi ý",
+                                       "Số plan", "Người thực hiện"])
+
+
+def assign_unresolved_ui(unres, ctx):
+    leads = lead_directory()
+    labels = [f"{l} — {e}" if e else l for l, e in leads]
+    by_name = {l: lab for (l, _), lab in zip(leads, labels)}
+    MAXR = 60
+    shown = unres.head(MAXR)
+    if len(unres) > MAXR:
+        st.caption(f"Hiển thị {MAXR}/{len(unres)} cửa hàng, phần còn lại xử lý ở tab 🧭 Phân luồng Lead.")
+    choices = {}
+    for _, r in shown.iterrows():
+        with st.container(border=True):
+            c1, c2 = st.columns([2.2, 1.6])
+            c1.markdown(f"**{r['store']}** · {r['Hệ thống']} · {r['Số plan']} plan  \n{r['Lý do']}"
+                        + (f"  \nNgười thực hiện: {r['Người thực hiện']}" if r["Người thực hiện"] else ""))
+            dflt = by_name.get(r["Gợi ý"])
+            choices[r["store"]] = c2.selectbox("Gán cho Lead (tên — email)", ["— chọn Lead —"] + labels,
+                                               index=(labels.index(dflt) + 1) if dflt in labels else 0,
+                                               key=f"asg_{ctx}_{r['store']}", label_visibility="collapsed")
+    n_ok = sum(1 for v in choices.values() if v != "— chọn Lead —")
+    if st.button(f"💾 Lưu phân luồng ({n_ok} cửa hàng)", disabled=n_ok == 0, type="primary", key=f"asg_save_{ctx}"):
+        save_store_overrides([{"store": s, "lead": v.split(" — ")[0]} for s, v in choices.items() if v != "— chọn Lead —"],
+                             by=USER["email"])
+        st.session_state["route_msg"] = f"Đã phân luồng {n_ok} cửa hàng."
+        st.rerun()
+
+
+def tab_routing(P, unres):
+    ovr = load_store_overrides()
+    leads = lead_directory()
+    labels = [f"{l} — {e}" if e else l for l, e in leads]
+    msg = st.session_state.pop("route_msg", None)
+    if msg:
+        st.success(msg)
+    st_tbl = P.groupby("store").agg(**{"Hệ thống": ("Hệ thống", "first"), "Lead": ("Lead", "first"), "Số plan": ("Tên Plan", "size"),
+                                       "Địa chỉ": ("Địa chỉ", "first")}).reset_index()
+    n_unassigned = int(st_tbl["Lead"].isin(["", "Chưa gán"]).sum())
+    c = st.columns(4)
+    c[0].metric("Cửa hàng có plan trong raw", len(st_tbl))
+    c[1].metric("Đã gán Lead", len(st_tbl) - n_unassigned)
+    c[2].metric("Chưa xác định rõ Lead", len(unres))
+    c[3].metric("Admin đã phân luồng thủ công", len(ovr))
+    if not len(ovr) == 0 and STORE_OVR_LIVE.exists():
+        st.warning("Phân luồng thủ công đang lưu trên máy chủ, **mất khi app khởi động lại**. Bấm **📥 Tải store_lead_override.csv** "
+                   "ở cuối trang rồi upload lên GitHub (cùng thư mục với app.py) để giữ lâu dài.")
+    section("Cửa hàng chưa xác định rõ Lead", "Chưa có trong danh sách cửa hàng, chưa gán Lead, hoặc raw / người thực hiện chỉ về Lead khác")
+    if unres.empty:
+        st.success("Mọi cửa hàng có plan trong raw đều đã xác định rõ Lead.")
+    else:
+        assign_unresolved_ui(unres, "tab")
+
+    section("Số cửa hàng theo Lead", "Dùng để chắc chắn không thiếu cửa hàng ở dashboard nào")
+    em = dict(leads)
+    cnt = st_tbl.pivot_table(index="Lead", columns="Hệ thống", values="store", aggfunc="count", fill_value=0)
+    cnt["Tổng"] = cnt.sum(axis=1)
+    cnt.insert(0, "Email Lead", [em.get(i, "") for i in cnt.index])
+    show_df(cnt.rename_axis("Lead").reset_index())
+
+    section("Phân luồng lại cửa hàng", "Chọn cửa hàng rồi gán sang Lead khác (tên và email). Có hiệu lực ngay ở dashboard của các Lead.")
+    f1, f2 = st.columns([1, 2])
+    flt_lead = f1.selectbox("Lọc theo Lead hiện tại", ["Tất cả"] + sorted(set(st_tbl["Lead"])), key="route_flt_lead")
+    flt_q = f2.text_input("🔎 Tìm mã cửa hàng (dán nhiều mã được)", key="route_flt_q")
+    d = st_tbl if flt_lead == "Tất cả" else st_tbl[st_tbl["Lead"] == flt_lead]
+    d = token_filter(d, ["store", "Địa chỉ"], flt_q)
+    st.caption(f"{len(d)} cửa hàng đang lọc")
+    pick = st.multiselect("Chọn cửa hàng cần phân luồng", d["store"].tolist(), key="route_pick",
+                          format_func=lambda s: f"{s} ({d.loc[d['store'] == s, 'Lead'].iloc[0]})" if (d["store"] == s).any() else s)
+    tgt = st.selectbox("Gán cho Lead (tên — email)", ["— chọn Lead —"] + labels, key="route_target")
+    if st.button(f"➡️ Gán {len(pick)} cửa hàng cho Lead đã chọn", disabled=not pick or tgt == "— chọn Lead —", type="primary", key="route_btn"):
+        save_store_overrides([{"store": s, "lead": tgt.split(" — ")[0]} for s in pick], by=USER["email"])
+        st.session_state["route_msg"] = f"Đã gán {len(pick)} cửa hàng cho {tgt}."
+        st.rerun()
+
+    section("Lưu lại và xuất file")
+    src = st_tbl["store"].map(lambda s: "Admin phân luồng" if s in set(ovr["store"]) else ("Danh sách cửa hàng" if s in set(default_stores["Mã cửa hàng"]) else "Theo raw"))
+    full = pd.DataFrame({"Mã cửa hàng": st_tbl["store"], "Hệ thống": st_tbl["Hệ thống"], "Địa chỉ": st_tbl["Địa chỉ"], "Lead": st_tbl["Lead"],
+                         "Email Lead": st_tbl["Lead"].map(lambda x: em.get(x, "")), "Nguồn gán": src, "Số plan": st_tbl["Số plan"]})
+    e1, e2 = st.columns(2)
+    e1.download_button("📥 Tải store_lead_override.csv (để lưu lên GitHub)", key="route_dl_csv", file_name="store_lead_override.csv", mime="text/csv",
+                       data=ovr.to_csv(index=False).encode("utf-8"))
+    e2.download_button("📥 Xuất Excel – danh sách cửa hàng theo Lead", key="route_dl_xlsx", file_name=f"cua_hang_theo_lead_{stamp()}.xlsx",
+                       mime=XLSX_MIME, data=to_excel_multi({"Cửa hàng theo Lead": full}))
+    if len(ovr):
+        section("Phân luồng thủ công đã lưu")
+        show_df(ovr.assign(**{"Email Lead": ovr["lead"].map(lambda x: em.get(x, ""))}).rename(columns={
+            "store": "Mã cửa hàng", "lead": "Lead", "time": "Lưu lúc", "by": "Người lưu"}), height=240)
+
+
 # =====================================================================
 # Main
 # =====================================================================
@@ -2925,6 +3457,8 @@ def render_round(file_bytes, fname, label):
     if IS_ADMIN and not FLAGS_OK:
         st.warning("File store_master.csv trên GitHub là bản cũ (thiếu cột Mystery / L2). "
                    "Hãy upload lại store_master.csv bản mới để số liệu Mystery và Lần 2 đúng.")
+    P = add_overdue(P)
+    unres = unresolved_stores(P, OVR) if IS_ADMIN else pd.DataFrame()
     IVc = check_audience(bundle["IV"], staff, ALLOWED_KW)
     scope = stores
     if ROLE == "lead":  # Lead chỉ thấy plan thuộc cửa hàng của mình
@@ -2938,22 +3472,23 @@ def render_round(file_bytes, fname, label):
         if not IVc.empty and "field_name" in IVc.columns:
             IVc = IVc[IVc["field_name"].fillna("").apply(norm).isin(MY_NAMES)]
         wrong, low = split_notices(IVc)
-        bell(wrong, low, f"{fname}|{label}|{ROLE}|{USER['email']}")
+        bell(wrong, low, P[P["Quá hạn"]], pd.DataFrame(), f"{fname}|{label}|{ROLE}|{USER['email']}")
         field_home(P, P_all, IVc, label)
         return
     bundle = {**bundle, "P": P, "IV": IVc, "fb": file_bytes}
     wrong, low = split_notices(IVc)
-    bell(wrong, low, f"{fname}|{label}|{ROLE}|{MY_LEAD}")
+    over = P[P["Quá hạn"]]
+    bell(wrong, low, over, unres, f"{fname}|{label}|{ROLE}|{MY_LEAD}")
     cps_m, dtv_m, my_m, ls = analyze(P, label, scope)
     camp = campus_matrix(P)
     names = ["📊 Tổng quan", "🏬 CPS – 4 hạng mục", "🏪 DTV", "➕ Plus 1–5", "🕵️ Mystery", "🎓 CAMPUS",
              "🎤 Trả bài Plus", "⚠️ Bị từ chối", "👥 Nhân sự Field", "📨 Yêu cầu bổ sung"]
     if IS_ADMIN:
-        names += ["📈 Hiệu suất QC", "🧪 Kiểm tra dữ liệu", "🔐 Tài khoản"]
+        names += ["🧭 Phân luồng Lead", "📈 Hiệu suất QC", "🧪 Kiểm tra dữ liệu", "🔐 Tài khoản"]
     tabs = st.tabs(names)
     trade = P[P["Nghiệp vụ"] == "Trade"]
     with tabs[0]:
-        safe(tab_overview, P, cps_m, dtv_m, my_m, ls, label, len(wrong), len(low))
+        safe(tab_overview, P, cps_m, dtv_m, my_m, ls, label, len(wrong), len(low), len(over), len(unres))
     with tabs[1]:
         safe(tab_trade, cps_m, CPS_ITEMS, "CPS", "cps", int((trade["Hệ thống"] == "CPS").sum()), label)
     with tabs[2]:
@@ -2978,10 +3513,12 @@ def render_round(file_bytes, fname, label):
         safe(tab_requests, P)
     if IS_ADMIN:
         with tabs[10]:
-            safe(tab_qc, P)
+            safe(tab_routing, P, unres)
         with tabs[11]:
-            safe(tab_validation, P, bundle, label)
+            safe(tab_qc, P)
         with tabs[12]:
+            safe(tab_validation, P, bundle, label)
+        with tabs[13]:
             safe(tab_accounts, P)
 
 
