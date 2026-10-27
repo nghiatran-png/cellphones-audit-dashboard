@@ -9,9 +9,11 @@ import math
 import numbers
 import re
 import secrets
+import smtplib
 import threading
 import time
 import traceback
+from email.message import EmailMessage
 import unicodedata
 from pathlib import Path
 
@@ -23,7 +25,7 @@ import streamlit as st
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
                    layout="wide", initial_sidebar_state="auto")
 
-APP_VERSION = "6.0.0"
+APP_VERSION = "6.2.1"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -125,6 +127,8 @@ section[data-testid="stSidebar"] .chip{white-space:normal;line-height:1.35}
 .splus{font-size:12px;color:#475467;margin-top:8px}
 .smiss{font-size:12.5px;color:#b42318;margin-top:8px;font-weight:600}.smiss.ok{color:#067647}
 .sother{font-size:12px;color:var(--muted);margin-top:6px}
+.lg-title{font-size:22px;font-weight:800;color:var(--ink);margin:8px 0 2px}
+.lg-sub{font-size:13px;color:var(--muted);margin-bottom:12px}
 @keyframes ring{0%,100%{box-shadow:0 0 0 0 rgba(217,45,32,.55)}50%{box-shadow:0 0 0 12px rgba(217,45,32,0)}}
 </style>
 """, unsafe_allow_html=True)
@@ -529,9 +533,9 @@ def store_signature():
     """Đổi khi store_master.csv được cập nhật -> cache tự làm mới."""
     try:
         stt = STORE_FILE.stat()
-        return f"{stt.st_mtime_ns}-{stt.st_size}"
+        return f"{APP_VERSION}-{stt.st_mtime_ns}-{stt.st_size}"
     except (OSError, AttributeError):
-        return "missing"
+        return f"{APP_VERSION}-missing"
 
 
 @st.cache_data(show_spinner=False)
@@ -874,7 +878,8 @@ def store_matrix(P, stores, system, items, only_l2=False):
     known = set(stores["Mã cửa hàng"]) if not stores.empty else set()
     info = stores.set_index("Mã cửa hàng") if not stores.empty else None
     lead_raw = t.drop_duplicates("store").set_index("store")["Lead"].to_dict()
-    codes = list(s["Mã cửa hàng"]) + sorted(set(t["store"]) - known)
+    # Lần 2: ngoài danh sách Lần 2 trong Excel, vẫn hiện cửa hàng nào có plan trong raw của đợt này
+    codes = list(s["Mã cửa hàng"]) + sorted(set(t["store"]) - set(s["Mã cửa hàng"]))
     rows = []
     for code in codes:
         in_m = info is not None and code in info.index
@@ -1060,9 +1065,9 @@ def parse_staff(file_bytes, name=""):
 def staff_signature():
     try:
         stt = STAFF_FILE.stat()
-        return f"{stt.st_mtime_ns}-{stt.st_size}"
+        return f"{APP_VERSION}-{stt.st_mtime_ns}-{stt.st_size}"
     except (OSError, AttributeError):
-        return "missing"
+        return f"{APP_VERSION}-missing"
 
 
 @st.cache_data(show_spinner=False)
@@ -1133,8 +1138,10 @@ def split_notices(IVc):
     return wrong, low
 
 
-def _notices_body(wrong, low, over, unres):
+def _notices_body(wrong, low, over, unres, resets):
     parts = []
+    if len(resets):
+        parts.append((f"🔑 Yêu cầu mật khẩu ({len(resets)})", "reset"))
     if len(unres):
         parts.append((f"🧭 Chưa rõ Lead ({len(unres)})", "unres"))
     if len(over):
@@ -1148,7 +1155,10 @@ def _notices_body(wrong, low, over, unres):
     e2m = name_email_map() if AUTH_ON else {}
     for tb, (_, kind) in zip(st.tabs([p[0] for p in parts]), parts):
         with tb:
-            if kind == "unres":
+            if kind == "reset":
+                st.error(f"🔑 {len(resets)} người dùng đang chờ cấp mã kích hoạt / đặt lại mật khẩu.")
+                reset_requests_ui("dlg")
+            elif kind == "unres":
                 st.error(f"🧭 {len(unres)} cửa hàng chưa xác định rõ Lead. Chọn đúng Lead (tên và email) rồi lưu để cửa hàng "
                          "hiện đủ ở dashboard của Lead đó.")
                 assign_unresolved_ui(unres, "dlg")
@@ -1175,28 +1185,28 @@ def _notices_body(wrong, low, over, unres):
 show_notices = _dialog("🔔 Thông báo cần xử lý", width="large")(_notices_body) if _dialog else None
 
 
-def bell(wrong, low, over, unres, tag):
+def bell(wrong, low, over, unres, resets, tag):
     """Chuông thông báo (góc trên bên phải). Đỏ nhấp nháy khi có việc khẩn (chưa rõ Lead, quá hạn bổ sung, sai đối tượng),
     cam khi chỉ có nhân viên dưới ngưỡng cần follow. Mỗi người chỉ thấy phần liên quan; admin thấy toàn bộ.
     Tự bật popup 1 lần khi có thông báo mới."""
-    n = {"unres": len(unres), "over": len(over), "wrong": len(wrong), "low": len(low)}
+    n = {"reset": len(resets), "unres": len(unres), "over": len(over), "wrong": len(wrong), "low": len(low)}
     total = sum(n.values())
-    txt = {"unres": f"{n['unres']} chưa rõ Lead", "over": f"{n['over']} quá hạn bổ sung",
+    txt = {"reset": f"{n['reset']} yêu cầu mật khẩu", "unres": f"{n['unres']} chưa rõ Lead", "over": f"{n['over']} quá hạn bổ sung",
            "wrong": f"{n['wrong']} sai đối tượng", "low": f"{n['low']} dưới {THR}%"}
-    parts = [txt[k] for k in ("unres", "over", "wrong", "low") if n[k]]
+    parts = [txt[k] for k in ("reset", "unres", "over", "wrong", "low") if n[k]]
     label = "🔔 Không có thông báo" if not total else ("🔔 " + " · ".join(parts) if len(parts) <= 2 else f"🔔 {total} thông báo")
-    urgent = n["unres"] or n["over"] or n["wrong"]
+    urgent = n["reset"] or n["unres"] or n["over"] or n["wrong"]
     clicked = st.button(label, key="bell_alert" if urgent else "bell_warn" if n["low"] else "bell_ok",
                         help="; ".join(parts) if parts else "Không có thông báo")
-    sig = f"{tag}|{n['unres']}|{n['over']}|{n['wrong']}|{n['low']}"
+    sig = f"{tag}|{n['reset']}|{n['unres']}|{n['over']}|{n['wrong']}|{n['low']}"
     auto = total > 0 and st.session_state.get("bell_seen") != sig
     if auto:
         st.session_state["bell_seen"] = sig
     if total and (clicked or auto):
         if show_notices:
-            show_notices(wrong, low, over, unres)
+            show_notices(wrong, low, over, unres, resets)
         else:
-            _notices_body(wrong, low, over, unres)
+            _notices_body(wrong, low, over, unres, resets)
 
 
 # =====================================================================
@@ -1316,11 +1326,11 @@ def users_signature():
     try:
         p = users_source()
         if p is None:
-            return "embedded"
+            return f"{APP_VERSION}-embedded"
         stt = p.stat()
-        return f"{p.name}-{stt.st_mtime_ns}-{stt.st_size}"
+        return f"{APP_VERSION}-{p.name}-{stt.st_mtime_ns}-{stt.st_size}"
     except OSError:
-        return "missing"
+        return f"{APP_VERSION}-missing"
 
 
 @st.cache_data(show_spinner=False)
@@ -1371,7 +1381,7 @@ ONLINE_MIN = 15  # coi là "đang online" nếu có hoạt động trong ngần 
 
 @st.cache_resource
 def _log_lock():
-    return threading.Lock()
+    return threading.RLock()
 
 
 def _now_iso():
@@ -1474,16 +1484,210 @@ def login_state(u, now=None):
     return ("🟢 Đang online" if online else "✅ Đã đăng nhập" if ever else "⚪ Chưa đăng nhập"), ever, online
 
 
+# =====================================================================
+# Quên mật khẩu / Kích hoạt bằng mã dùng một lần
+# =====================================================================
+USER_SAVE_COLS = ["email", "role", "display_name", "lead", "field_names", "salt", "hash", "active"]
+RESET_FILE = DATA_DIR / "reset_requests.json"
+RESET_HOURS_ADMIN = 24  # mã do admin cấp có hiệu lực 24 giờ
+RESET_HOURS_MAIL = 1    # mã gửi tự động qua email có hiệu lực 1 giờ
+RESET_MAX_TRIES = 5
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRTUVWXYZ2346789"
+
+
+def save_users(df):
+    with _log_lock():
+        DATA_DIR.mkdir(exist_ok=True)
+        tmp = USERS_LIVE.with_suffix(".tmp")
+        df[USER_SAVE_COLS].to_csv(tmp, index=False, encoding="utf-8")
+        tmp.replace(USERS_LIVE)
+
+
+def gen_code(n=8):
+    return "".join(secrets.choice(CODE_ALPHABET) for _ in range(n))
+
+
+def check_password_rules(new, confirm):
+    """Quy tắc mật khẩu mới (rỗng nếu hợp lệ)."""
+    if not new or not confirm:
+        return "Vui lòng nhập mật khẩu mới và nhập lại."
+    if new != confirm:
+        return "Mật khẩu mới nhập lại không khớp."
+    if len(new) < 8:
+        return "Mật khẩu mới phải có ít nhất 8 ký tự."
+    if not (re.search(r"[A-Za-z]", new) and re.search(r"\d", new)):
+        return "Mật khẩu mới cần có cả chữ và số."
+    return ""
+
+
+def load_resets():
+    try:
+        return json.loads(RESET_FILE.read_text("utf-8")) if RESET_FILE.exists() else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _save_resets(items):
+    DATA_DIR.mkdir(exist_ok=True)
+    tmp = RESET_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(items[-500:], ensure_ascii=False), "utf-8")
+    tmp.replace(RESET_FILE)
+
+
+def pending_resets():
+    return [r for r in load_resets() if r.get("status") == "Chờ cấp mã"]
+
+
+def _find_user(key):
+    u = load_users(users_signature())
+    r = u[u["key"] == key]
+    return None if r.empty else r.iloc[0]
+
+
+def _store_issued(email, code, by, hours, name="", note=""):
+    key, salt = str(email).strip().lower(), secrets.token_hex(16)
+    exp = (pd.Timestamp.now(tz="Asia/Ho_Chi_Minh") + pd.Timedelta(hours=hours)).isoformat(timespec="seconds")
+    with _log_lock():
+        items = load_resets()
+        rec = next((r for r in items if r.get("key") == key and r.get("status") == "Chờ cấp mã"), None)
+        if rec is None:
+            rec = {"id": f"p{int(time.time() * 1000)}{secrets.token_hex(2)}", "key": key, "email": email, "name": name,
+                   "note": note, "created": _now_iso(), "status": "Chờ cấp mã"}
+            items.append(rec)
+        for r in items:  # mã cũ của cùng tài khoản mất hiệu lực
+            if r.get("key") == key and r.get("status") == "Đã cấp mã":
+                r["status"] = "Thay bằng mã mới"
+        rec.update({"status": "Đã cấp mã", "hash": hash_pw(code, salt), "salt": salt, "expires": exp, "issued_by": by,
+                    "issued_at": _now_iso(), "attempts": 0})
+        _save_resets(items)
+    return exp
+
+
+def issue_reset_code(email, by, hours=RESET_HOURS_ADMIN, name="", note=""):
+    """Admin cấp mã cho một tài khoản. Trả về (mã, thời điểm hết hạn). Mã chỉ hiện một lần, hệ thống chỉ lưu bản băm."""
+    code = gen_code()
+    return code, _store_issued(email, code, by, hours, name, note)
+
+
+def reject_reset(rid):
+    with _log_lock():
+        items = load_resets()
+        for r in items:
+            if r.get("id") == rid and r.get("status") == "Chờ cấp mã":
+                r["status"] = "Từ chối"
+        _save_resets(items)
+
+
+def smtp_cfg():
+    """Cấu hình gửi email (Streamlit Secrets, mục [smtp]). Không có thì chạy chế độ admin cấp mã."""
+    try:
+        c = st.secrets.get("smtp", None)
+        c = dict(c) if c else None
+    except Exception:  # noqa: BLE001
+        return None
+    return c if c and all(c.get(k) for k in ("host", "user", "password")) else None
+
+
+def send_reset_email(to, code, name="", hours=RESET_HOURS_MAIL):
+    cfg = smtp_cfg()
+    if not cfg:
+        return False
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = "Mã đặt lại mật khẩu CellphoneS Audit"
+        msg["From"] = f'{cfg.get("from_name", "CellphoneS Audit")} <{cfg["user"]}>'
+        msg["To"] = to
+        msg.set_content(f"Chào {name or to},\n\nMã đặt lại mật khẩu của bạn: {code}\n"
+                        f"Mã có hiệu lực {hours} giờ và chỉ dùng được một lần.\n"
+                        "Nếu bạn không yêu cầu, hãy bỏ qua email này.\n")
+        port = int(cfg.get("port", 465))
+        with (smtplib.SMTP_SSL(cfg["host"], port, timeout=15) if port == 465 else smtplib.SMTP(cfg["host"], port, timeout=15)) as s:
+            if port != 465:
+                s.starttls()
+            s.login(cfg["user"], cfg["password"])
+            s.send_message(msg)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def request_reset(email, name="", note=""):
+    """Người dùng bấm 'Quên mật khẩu'. Không tiết lộ tài khoản có tồn tại hay không.
+    Nếu đã cấu hình email: gửi mã tự động; ngược lại tạo yêu cầu chờ admin cấp mã."""
+    key = str(email).strip().lower()
+    u = _find_user(key)
+    if u is None or str(u.get("active", "1")) == "0":
+        return
+    if smtp_cfg():
+        code = gen_code()
+        if send_reset_email(u["email"], code, u["display_name"], RESET_HOURS_MAIL):
+            _store_issued(u["email"], code, "Tự động (email)", RESET_HOURS_MAIL, name, note)
+            return
+    with _log_lock():
+        items = load_resets()
+        if any(r.get("key") == key and r.get("status") == "Chờ cấp mã" for r in items):
+            return
+        items.append({"id": f"p{int(time.time() * 1000)}{secrets.token_hex(2)}", "key": key, "email": u["email"], "name": name,
+                      "note": note, "created": _now_iso(), "status": "Chờ cấp mã"})
+        _save_resets(items)
+
+
+def apply_reset_code(email, code, new, confirm):
+    """Đặt mật khẩu mới bằng mã dùng một lần. Trả về thông báo lỗi (rỗng nếu thành công)."""
+    err = check_password_rules(new, confirm)
+    if err:
+        return err
+    generic = "Mã không đúng hoặc đã hết hạn. Hãy gửi yêu cầu cấp mã mới."
+    key = str(email).strip().lower()
+    fails = _login_fails()
+    n, ts = fails.get("rs:" + key, (0, 0.0))
+    if n >= 8 and time.time() - ts < 900:
+        return "Đã nhập sai nhiều lần, tạm khóa 15 phút."
+    code = str(code).strip().upper().replace(" ", "")
+    with _log_lock():
+        items = load_resets()
+        cand = [r for r in items if r.get("key") == key and r.get("status") == "Đã cấp mã"]
+        if not code or not cand:
+            fails["rs:" + key] = ((n + 1) if time.time() - ts < 900 else 1, time.time())
+            return generic
+        r = cand[-1]
+        if pd.Timestamp.now(tz="Asia/Ho_Chi_Minh") > pd.Timestamp(r["expires"]):
+            r["status"] = "Hết hạn"
+            _save_resets(items)
+            return generic
+        if not hmac.compare_digest(hash_pw(code, r["salt"]), r["hash"]):
+            r["attempts"] = int(r.get("attempts", 0)) + 1
+            if r["attempts"] >= RESET_MAX_TRIES:
+                r["status"] = "Khóa mã (nhập sai nhiều lần)"
+            fails["rs:" + key] = ((n + 1) if time.time() - ts < 900 else 1, time.time())
+            _save_resets(items)
+            return generic
+        users = load_users(users_signature()).reset_index(drop=True)
+        idx = users.index[users["key"] == key]
+        if len(idx) == 0:
+            return generic
+        salt = secrets.token_hex(16)
+        users.loc[idx[0], "salt"], users.loc[idx[0], "hash"] = salt, hash_pw(new, salt)
+        save_users(users)
+        r["status"], r["used_at"] = "Đã đặt lại", _now_iso()
+        _save_resets(items)
+        fails.pop("rs:" + key, None)
+    return ""
+
+
 def login_screen():
     st.markdown('<div class="brand" style="justify-content:center;margin-top:60px"><div class="logo">C</div><div>'
                 '<div class="bn">CellphoneS Audit</div><div class="bs">Đăng nhập để xem dashboard</div></div></div>',
                 unsafe_allow_html=True)
-    _, mid, _ = st.columns([1, 1.1, 1])
+    _, mid, _ = st.columns([1, 1.9, 1])
     with mid:
         notice = st.session_state.pop("login_msg", None)
         if notice:
             st.warning(notice)
-        with st.container(border=True):
+        st.markdown('<div class="lg-title">Đăng nhập</div><div class="lg-sub">Dùng email tài khoản dự án đã được cấp.</div>',
+                    unsafe_allow_html=True)
+        t_login, t_reset = st.tabs(["Đăng nhập", "Kích hoạt / Quên MK"])
+        with t_login:
             with st.form("login_form"):
                 email = st.text_input("Email / tên đăng nhập", key="login_email")
                 pw = st.text_input("Mật khẩu", type="password", key="login_pw")
@@ -1495,7 +1699,35 @@ def login_screen():
                     record_login(user["email"], user.get("role", ""))
                     st.rerun()
                 st.error(msg)
-        st.caption("Chưa có tài khoản hoặc quên mật khẩu: liên hệ quản trị dashboard.")
+        with t_reset:
+            st.caption("Kích hoạt tài khoản mới hoặc đặt lại mật khẩu bằng **mã dùng một lần**.")
+            st.markdown("**Bước 1 – Lấy mã**")
+            with st.form("reqcode_form"):
+                r_email = st.text_input("Email tài khoản", key="rq_email")
+                r_name = st.text_input("Họ tên (để quản trị nhận diện)", key="rq_name")
+                r_note = st.text_input("Ghi chú (không bắt buộc)", key="rq_note")
+                go_rq = st.form_submit_button("Gửi yêu cầu cấp mã")
+            if go_rq:
+                if not r_email.strip():
+                    st.error("Vui lòng nhập email tài khoản.")
+                else:
+                    request_reset(r_email, r_name, r_note)
+                    st.success("Đã ghi nhận yêu cầu. Nếu email có trong hệ thống, bạn sẽ nhận mã qua email "
+                               "(kiểm tra cả mục Spam) hoặc từ quản trị viên. Có mã rồi thì sang Bước 2.")
+            st.markdown("**Bước 2 – Nhập mã và đặt mật khẩu mới**")
+            with st.form("applycode_form"):
+                a_email = st.text_input("Email tài khoản", key="ap_email")
+                a_code = st.text_input("Mã nhận được", key="ap_code")
+                a_new = st.text_input("Mật khẩu mới (từ 8 ký tự, có chữ và số)", type="password", key="ap_new")
+                a_cf = st.text_input("Nhập lại mật khẩu mới", type="password", key="ap_cf")
+                go_ap = st.form_submit_button("Đặt mật khẩu mới", type="primary")
+            if go_ap:
+                e_ = apply_reset_code(a_email, a_code, a_new, a_cf)
+                if e_:
+                    st.error(e_)
+                else:
+                    st.success("Đã đặt mật khẩu mới. Quay lại tab 'Đăng nhập' để vào hệ thống.")
+        st.caption("Cần hỗ trợ thêm: liên hệ quản trị dashboard.")
 
 
 AUTH_ON = True  # luôn bật đăng nhập (không còn chế độ mở)
@@ -1672,17 +1904,6 @@ def reset_passwords(users, keys):
     return u, out
 
 
-USER_SAVE_COLS = ["email", "role", "display_name", "lead", "field_names", "salt", "hash", "active"]
-
-
-def save_users(df):
-    with _req_lock():
-        DATA_DIR.mkdir(exist_ok=True)
-        tmp = USERS_LIVE.with_suffix(".tmp")
-        df[USER_SAVE_COLS].to_csv(tmp, index=False, encoding="utf-8")
-        tmp.replace(USERS_LIVE)
-
-
 def base_users():
     """Danh sách tài khoản gốc (users.csv trên GitHub hoặc bản tích hợp), không tính chỉnh sửa trên máy chủ."""
     if USERS_FILE is not None and USERS_FILE.exists():
@@ -1738,6 +1959,87 @@ def pw_xlsx_bytes(rows):
     buf = io.BytesIO()
     pd.DataFrame(rows).to_excel(buf, index=False)
     return buf.getvalue()
+
+
+def _decode_embedded(blob):
+    return gzip.decompress(base64.b64decode("".join(blob.split())))
+
+
+def store_file_diff():
+    """Cửa hàng mà store_master.csv trên GitHub ghi Lead khác với bản mới nhất tích hợp trong app (file GitHub đang đè bản mới)."""
+    cols = ["Mã cửa hàng", "Lead trên GitHub (cũ)", "Lead bản mới nhất"]
+    if STORE_FILE is None or not STORE_FILE.exists():
+        return pd.DataFrame(columns=cols)
+    repo = parse_store_master(STORE_FILE.read_bytes(), STORE_FILE.name)
+    emb = parse_store_master(_decode_embedded(_EMBEDDED_STORES), "store_master.csv")
+    if repo.empty or emb.empty:
+        return pd.DataFrame(columns=cols)
+    m = repo[["Mã cửa hàng", "Lead"]].merge(emb[["Mã cửa hàng", "Lead"]], on="Mã cửa hàng", suffixes=("_repo", "_new"))
+    d = m[m["Lead_repo"] != m["Lead_new"]]
+    ovr = load_store_overrides()  # cửa hàng đã được áp dụng Lead mới bằng phân luồng thì không báo nữa
+    done = set(ovr.loc[ovr["lead"].isin(d["Lead_new"]), "store"]) if len(ovr) else set()
+    if done:
+        om = dict(zip(ovr["store"], ovr["lead"]))
+        d = d[~d.apply(lambda r: om.get(r["Mã cửa hàng"]) == r["Lead_new"], axis=1)]
+    return d.rename(columns={"Lead_repo": cols[1], "Lead_new": cols[2]}).reset_index(drop=True)
+
+
+def users_file_diff():
+    """Tài khoản bản mới nhất tích hợp trong app mà users.csv trên GitHub thiếu hoặc ghi khác (tên, vai trò, Lead, tên người thực hiện)."""
+    cols = ["Tài khoản", "Tình trạng", "Bản mới nhất", "Trên GitHub (cũ)"]
+    if USERS_FILE is None or not USERS_FILE.exists():
+        return pd.DataFrame(columns=cols)
+    repo = pd.read_csv(io.BytesIO(USERS_FILE.read_bytes()), dtype=str).fillna("")
+    repo["key"] = repo["email"].str.strip().str.lower()
+    emb = pd.read_csv(io.BytesIO(_decode_embedded(_EMBEDDED_USERS)), dtype=str).fillna("")
+    emb["key"] = emb["email"].str.strip().str.lower()
+    rk = repo.set_index("key")
+    cur = load_users(users_signature()).set_index("key")  # tài khoản đã được cập nhật trong app (bản chỉnh sửa) thì không báo nữa
+    rows = []
+    f0 = ["display_name", "role", "lead", "field_names"]
+    for _, e in emb.iterrows():
+        if e["key"] in cur.index and all(str(e[c]) == str(cur.loc[e["key"], c]) for c in f0):
+            continue
+        if e["key"] not in rk.index:
+            rows.append({cols[0]: e["email"], cols[1]: "Thiếu trên GitHub", cols[2]: f"{e['display_name']} · {e['lead']}", cols[3]: "—"})
+            continue
+        r = rk.loc[e["key"]]
+        f = ["display_name", "role", "lead", "field_names"]
+        if any(str(e[c]) != str(r[c]) for c in f):
+            rows.append({cols[0]: e["email"], cols[1]: "Khác bản mới nhất", cols[2]: f"{e['display_name']} · {e['lead']}",
+                         cols[3]: f"{r['display_name']} · {r['lead']}"})
+    return pd.DataFrame(rows, columns=cols)
+
+
+def sync_users_from_embedded(keys):
+    """Cập nhật các tài khoản theo bản mới nhất tích hợp: tài khoản có rồi chỉ đổi tên/vai trò/Lead/tên người thực hiện (giữ mật khẩu),
+    tài khoản thiếu thì thêm mới (mật khẩu ban đầu như trong file mật khẩu)."""
+    emb = pd.read_csv(io.BytesIO(_decode_embedded(_EMBEDDED_USERS)), dtype=str).fillna("")
+    emb["key"] = emb["email"].str.strip().str.lower()
+    cur = load_users(users_signature()).reset_index(drop=True).copy()
+    for c in USER_SAVE_COLS:
+        if c not in cur.columns:
+            cur[c] = "1" if c == "active" else ""
+    add, n = [], 0
+    for k in keys:
+        e = emb[emb["key"] == k]
+        if e.empty:
+            continue
+        e = e.iloc[0]
+        idx = cur.index[cur["key"] == k]
+        if len(idx):
+            for c in ["display_name", "role", "lead", "field_names"]:
+                cur.loc[idx[0], c] = e[c]
+        else:
+            row = {c: e.get(c, "") for c in USER_SAVE_COLS}
+            row["active"] = row.get("active") or "1"
+            row["key"] = k
+            add.append(row)
+        n += 1
+    if add:
+        cur = pd.concat([cur, pd.DataFrame(add)], ignore_index=True)
+    save_users(cur)
+    return n
 
 
 # =====================================================================
@@ -2004,7 +2306,9 @@ def safe(fn, *args, **kw):
             st.code(traceback.format_exc())
 
 
-def tab_overview(P, cps_m, dtv_m, my_m, ls, label, n_alert=0, n_low=0, n_over=0, n_unres=0):
+def tab_overview(P, cps_m, dtv_m, my_m, ls, label, n_alert=0, n_low=0, n_over=0, n_unres=0, n_reset=0):
+    if n_reset:
+        st.error(f"🔑 Có {n_reset} người dùng đang chờ cấp mã kích hoạt / đặt lại mật khẩu. Mở tab '🔐 Tài khoản' (hoặc bấm chuông 🔔) để cấp mã.")
     if n_unres:
         st.error(f"🧭 Có {n_unres} cửa hàng chưa xác định rõ Lead. Mở tab '🧭 Phân luồng Lead' (hoặc bấm chuông 🔔) để gán đúng Lead, "
                  "tránh thiếu cửa hàng ở dashboard của Lead.")
@@ -2360,7 +2664,7 @@ def tab_validation(P, bundle, label):
               ("Các giá trị cột Chấm trong file", ", ".join(bundle["rounds"]) or "không có"),
               ("Số cửa hàng trong danh sách (store_master.csv)", len(stores)),
               ("Số cửa hàng được gắn cờ Mystery (cần = 125)", n_flag if n_flag else "THIẾU – cần upload store_master.csv bản mới"),
-              ("Số cửa hàng thuộc Lần 2 (cần = 174)", n_l2 if n_l2 else "THIẾU – cần upload store_master.csv bản mới"),
+              ("Số cửa hàng trong danh sách Lần 2 của Excel (= 174; cửa hàng nào có plan Lần 2 trong raw vẫn được hiện thêm)", n_l2 if n_l2 else "THIẾU – cần upload store_master.csv bản mới"),
               ("Số nhân sự trong danh sách nhân sự", len(staff) if len(staff) else "THIẾU – cần file nhan_su.csv"),
               ("Số bài Plus sai đối tượng", int(bundle["IV"]["Sai đối tượng"].sum())
                if "Sai đối tượng" in bundle["IV"].columns else "Chưa kiểm tra"),
@@ -2970,6 +3274,16 @@ def tab_accounts(P):
     msg = st.session_state.pop("acct_msg", None)
     if msg:
         st.success(msg)
+    ud_ = users_file_diff()
+    if len(ud_):
+        st.warning(f"File users.csv trên GitHub thiếu hoặc ghi khác bản mới nhất tích hợp trong app ở {len(ud_)} tài khoản "
+                   "(ví dụ tên / Lead / tên người thực hiện chưa cập nhật). Bấm nút để cập nhật các tài khoản này; "
+                   "mật khẩu của tài khoản đã có được giữ nguyên.")
+        show_df(ud_, height=min(60 + 36 * len(ud_), 240))
+        if st.button(f"🔄 Cập nhật {len(ud_)} tài khoản theo bản mới nhất", type="primary", key="acct_sync_btn"):
+            keys_ = [str(x).strip().lower() for x in ud_["Tài khoản"]]
+            st.session_state["acct_msg"] = f"Đã cập nhật {sync_users_from_embedded(keys_)} tài khoản theo bản mới nhất."
+            st.rerun()
     pws = st.session_state.get("acct_pw")
     if pws:
         section("Mật khẩu ban đầu (chỉ hiện một lần)", "Gửi riêng cho từng người; tải về ngay vì sẽ không xem lại được")
@@ -3095,7 +3409,8 @@ def tab_accounts(P):
                 st.session_state.pop("acct_pw", None)
             st.rerun()
 
-    section("Đặt lại mật khẩu", "Dùng khi nhân viên quên mật khẩu: tạo mật khẩu mới ngẫu nhiên, mật khẩu cũ mất hiệu lực")
+    reset_admin_section(users)
+    section("Đặt lại mật khẩu ngẫu nhiên", "Cách nhanh: tạo mật khẩu mới ngẫu nhiên ngay, mật khẩu cũ mất hiệu lực (admin gửi mật khẩu mới cho người dùng)")
     pick = st.multiselect("Chọn tài khoản", users["email"].tolist(), key="acct_reset_pick")
     if st.button("🔑 Đặt lại mật khẩu cho tài khoản đã chọn", disabled=not pick, key="acct_reset_btn"):
         newdf, out = reset_passwords(users, {p.strip().lower() for p in pick})
@@ -3392,6 +3707,16 @@ def tab_routing(P, unres):
     if not len(ovr) == 0 and STORE_OVR_LIVE.exists():
         st.warning("Phân luồng thủ công đang lưu trên máy chủ, **mất khi app khởi động lại**. Bấm **📥 Tải store_lead_override.csv** "
                    "ở cuối trang rồi upload lên GitHub (cùng thư mục với app.py) để giữ lâu dài.")
+    sd = store_file_diff()
+    if len(sd):
+        st.warning(f"File store_master.csv trên GitHub đang ghi Lead khác với bản mới nhất tích hợp trong app ở {len(sd)} cửa hàng "
+                   "(file cũ trên GitHub đang đè bản mới). Bấm nút bên dưới để áp dụng Lead của bản mới nhất, "
+                   "hoặc upload store_master.csv mới lên GitHub.")
+        show_df(sd, height=min(60 + 36 * len(sd), 260))
+        if st.button(f"🔄 Áp dụng Lead bản mới nhất cho {len(sd)} cửa hàng", type="primary", key="route_sync_btn"):
+            save_store_overrides([{"store": r["Mã cửa hàng"], "lead": r["Lead bản mới nhất"]} for _, r in sd.iterrows()], by=USER["email"])
+            st.session_state["route_msg"] = f"Đã áp dụng Lead bản mới nhất cho {len(sd)} cửa hàng."
+            st.rerun()
     section("Cửa hàng chưa xác định rõ Lead", "Chưa có trong danh sách cửa hàng, chưa gán Lead, hoặc raw / người thực hiện chỉ về Lead khác")
     if unres.empty:
         st.success("Mọi cửa hàng có plan trong raw đều đã xác định rõ Lead.")
@@ -3435,6 +3760,60 @@ def tab_routing(P, unres):
             "store": "Mã cửa hàng", "lead": "Lead", "time": "Lưu lúc", "by": "Người lưu"}), height=240)
 
 
+def reset_requests_ui(ctx):
+    """Danh sách yêu cầu cấp mã đang chờ; admin bấm Cấp mã (mã hiện một lần) hoặc Từ chối."""
+    pend = pending_resets()
+    if not pend:
+        st.success("Không có yêu cầu cấp mã nào đang chờ.")
+        return
+    st.caption("Bấm 'Cấp mã', mã hiện **một lần**: gửi riêng cho người dùng (Zalo/tin nhắn). Họ nhập mã ở tab 'Kích hoạt / Quên MK' trên màn hình đăng nhập.")
+    for r in pend:
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([3.2, 1.1, 1])
+            c1.markdown(f"**{r['email']}** · khai báo: {r.get('name') or '—'}  \nGhi chú: {r.get('note') or '—'} · gửi lúc {fmt_ts(r.get('created', ''))}")
+            if c2.button("🔑 Cấp mã", key=f"rs_issue_{ctx}_{r['id']}", type="primary"):
+                code, exp = issue_reset_code(r["email"], USER["email"], name=r.get("name", ""), note=r.get("note", ""))
+                st.success(f"Mã cho {r['email']} (hết hạn {fmt_ts(exp)}), chỉ hiện một lần:")
+                st.code(code, language=None)
+            if c3.button("Từ chối", key=f"rs_rej_{ctx}_{r['id']}"):
+                reject_reset(r["id"])
+                st.rerun()
+
+
+def reset_admin_section(users):
+    section("Cấp mã kích hoạt / đặt lại mật khẩu",
+            "Người dùng tự bấm 'Kích hoạt / Quên MK' trên màn hình đăng nhập; admin cấp mã một lần cho họ tự đặt mật khẩu mới")
+    cfg = smtp_cfg()
+    st.caption("🟢 Đã bật gửi mã tự động qua email: người dùng nhận mã trong email (hiệu lực 1 giờ), admin không cần cấp tay."
+               if cfg else "⚪ Chưa bật gửi email tự động: yêu cầu của người dùng sẽ hiện ở đây để admin cấp mã (hướng dẫn bật email nằm trong phần trả lời của người hỗ trợ).")
+    st.markdown("**Yêu cầu đang chờ**")
+    reset_requests_ui("tab")
+    st.markdown("**Tạo mã trực tiếp cho tài khoản** (kích hoạt tài khoản mới hoặc người dùng nhờ qua Zalo)")
+    pick = st.multiselect("Chọn tài khoản", users["email"].tolist(), key="rs_direct_pick")
+    if st.button("🔑 Tạo mã cho các tài khoản đã chọn", disabled=not pick, key="rs_direct_btn"):
+        out = []
+        for e in pick:
+            code, exp = issue_reset_code(e, USER["email"])
+            out.append({"Tài khoản": e, "Mã dùng một lần": code, "Hết hạn": fmt_ts(exp)})
+        st.success(f"Đã tạo {len(out)} mã (hiệu lực {RESET_HOURS_ADMIN} giờ, chỉ hiện một lần). Gửi riêng cho từng người:")
+        show_df(pd.DataFrame(out))
+        st.download_button("📥 Tải danh sách mã (Excel)", data=to_excel_multi({"Mã dùng một lần": pd.DataFrame(out)}),
+                           file_name=f"ma_kich_hoat_{stamp()}.xlsx", mime=XLSX_MIME, key="rs_direct_dl")
+    hist = load_resets()
+    if hist:
+        with st.expander(f"Lịch sử cấp mã ({len(hist)})"):
+            h = pd.DataFrame(hist[::-1])
+            cols = {"email": "Tài khoản", "status": "Trạng thái", "created": "Yêu cầu lúc", "issued_by": "Người cấp",
+                    "expires": "Hết hạn", "used_at": "Dùng lúc"}
+            for c in cols:
+                if c not in h.columns:
+                    h[c] = ""
+            h = h[list(cols)].rename(columns=cols)
+            for c in ["Yêu cầu lúc", "Hết hạn", "Dùng lúc"]:
+                h[c] = h[c].map(fmt_ts)
+            show_df(h.head(100), height=260)
+
+
 # =====================================================================
 # Main
 # =====================================================================
@@ -3472,13 +3851,14 @@ def render_round(file_bytes, fname, label):
         if not IVc.empty and "field_name" in IVc.columns:
             IVc = IVc[IVc["field_name"].fillna("").apply(norm).isin(MY_NAMES)]
         wrong, low = split_notices(IVc)
-        bell(wrong, low, P[P["Quá hạn"]], pd.DataFrame(), f"{fname}|{label}|{ROLE}|{USER['email']}")
+        bell(wrong, low, P[P["Quá hạn"]], pd.DataFrame(), pd.DataFrame(), f"{fname}|{label}|{ROLE}|{USER['email']}")
         field_home(P, P_all, IVc, label)
         return
     bundle = {**bundle, "P": P, "IV": IVc, "fb": file_bytes}
     wrong, low = split_notices(IVc)
     over = P[P["Quá hạn"]]
-    bell(wrong, low, over, unres, f"{fname}|{label}|{ROLE}|{MY_LEAD}")
+    resets = pd.DataFrame(pending_resets()) if IS_ADMIN else pd.DataFrame()
+    bell(wrong, low, over, unres, resets, f"{fname}|{label}|{ROLE}|{MY_LEAD}")
     cps_m, dtv_m, my_m, ls = analyze(P, label, scope)
     camp = campus_matrix(P)
     names = ["📊 Tổng quan", "🏬 CPS – 4 hạng mục", "🏪 DTV", "➕ Plus 1–5", "🕵️ Mystery", "🎓 CAMPUS",
@@ -3488,7 +3868,7 @@ def render_round(file_bytes, fname, label):
     tabs = st.tabs(names)
     trade = P[P["Nghiệp vụ"] == "Trade"]
     with tabs[0]:
-        safe(tab_overview, P, cps_m, dtv_m, my_m, ls, label, len(wrong), len(low), len(over), len(unres))
+        safe(tab_overview, P, cps_m, dtv_m, my_m, ls, label, len(wrong), len(low), len(over), len(unres), len(resets))
     with tabs[1]:
         safe(tab_trade, cps_m, CPS_ITEMS, "CPS", "cps", int((trade["Hệ thống"] == "CPS").sum()), label)
     with tabs[2]:
