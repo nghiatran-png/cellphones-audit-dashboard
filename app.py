@@ -25,7 +25,7 @@ import streamlit as st
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
                    layout="wide", initial_sidebar_state="auto")
 
-APP_VERSION = "6.2.1"
+APP_VERSION = "6.5.0"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -33,8 +33,8 @@ PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
 _ver = tuple(int(p) for p in st.__version__.split(".")[:2] if p.isdigit())
 STRETCH = {"width": "stretch"} if _ver >= (1, 50) else {"use_container_width": True}
 
-STATUS_LABEL = {"DONE": "✅ Hoàn thành", "REJECT": "❌ Bị từ chối", "WAIT_QC": "🕓 Chờ QC duyệt",
-                "NOT_FIELD": "⏳ Chưa Field xong", "NONE": "— Chưa có plan"}
+STATUS_LABEL = {"DONE": "✅ Đã up – QC đã duyệt", "REJECT": "❌ Đã up – QC trả về", "WAIT_QC": "🕓 Đã up – chờ QC",
+                "NOT_FIELD": "⏳ Chưa up", "NONE": "— Chưa có plan"}
 STATUS_COLOR = {STATUS_LABEL["DONE"]: "#12b76a", STATUS_LABEL["WAIT_QC"]: "#f79009", STATUS_LABEL["REJECT"]: "#f04438",
                 STATUS_LABEL["NOT_FIELD"]: "#98a2b3", STATUS_LABEL["NONE"]: "#d0d5dd"}
 REASON = {"WAIT_QC": "đã Field xong, chờ QC duyệt", "NOT_FIELD": "Field chưa hoàn thành", "NONE": "chưa có plan"}
@@ -258,7 +258,7 @@ px.defaults.color_discrete_sequence = PALETTE
 
 SERIES_COLORS = {
     "Bị từ chối": "#f04438", "Hoàn thành (Field + QC)": "#12b76a", "Hoàn thành": "#12b76a", "Hoàn tất": "#12b76a",
-    "Field xong": "#2e90fa", "QC duyệt xong": "#7a5af8", "Tổng plan": "#98a2b3", "Giao": "#98a2b3",
+    "Field xong": "#2e90fa", "Field đã up": "#2e90fa", "QC duyệt xong": "#7a5af8", "Tổng plan": "#98a2b3", "Giao": "#98a2b3",
     "Đã đủ": "#12b76a", "Chưa đủ": "#f04438", "Tổng": "#98a2b3",
     "Đã duyệt": "#12b76a", "Từ chối": "#f04438", "Chưa chấm": "#f79009",
     "CPS (cửa hàng)": "#b2ddff", "CPS hoàn thành": "#2e90fa", "DTV (cửa hàng)": "#d9d6fe", "DTV hoàn thành": "#7a5af8",
@@ -314,7 +314,7 @@ def kpi_card(label, value, sub="", p=None, bad=False):
             f'<div class="kv">{value}</div><div class="ks">{html.escape(str(sub))}</div>{bar}</div>')
 
 
-def lead_cards(ls):
+def lead_cards(ls, kpi_label="CPS + DTV + Mystery"):
     cards = []
     for _, r in ls.iterrows():
         overall = r["% KPI tổng (CPS+DTV+Mystery)"]
@@ -330,7 +330,7 @@ def lead_cards(ls):
                      f'background:{tone(p)}"></span></div><span class="mv">{int(done)}/{int(tot)}</span></div>')
         big = "—" if pd.isna(overall) else f"{overall:.0f}%"
         cards.append(f'<div class="lcard"><div class="lname">{html.escape(str(r["Lead"]))}</div>'
-                     f'<div class="lpct" style="color:{c}">{big}</div><div class="lsub">KPI tổng (CPS + DTV + Mystery)</div>{rows}</div>')
+                     f'<div class="lpct" style="color:{c}">{big}</div><div class="lsub">KPI tổng ({kpi_label})</div>{rows}</div>')
     st.markdown('<div class="lead-grid">' + "".join(cards) + "</div>", unsafe_allow_html=True)
 
 
@@ -718,7 +718,7 @@ def classify_item(kind, plan, hm):
     return hm_s or "Trade khác"
 
 
-P_COLS = ["Nghiệp vụ", "Tên Plan", "store", "Hệ thống", "Hạng mục", "Lead", "Địa chỉ", "QC", "Field done",
+P_COLS = ["Nghiệp vụ", "Tên Plan", "store", "Hệ thống", "Hạng mục", "Lead", "Địa chỉ", "QC", "Field done", "Đã up",
           "QC done", "Hoàn thành", "Bị từ chối", "_st", "Ghi chú QC", "Ngày update", "Field name",
           "lead_raw", "status_raw", "auditor", "QM", "Chờ QM", "th_date"]
 
@@ -764,8 +764,11 @@ def build_plans(sheets, label, stores, campus_kw="CAMPUS"):
     # nên Field xong khi plan đã có ngày thực hiện (đã được chấm).
     st_norm = P["status_raw"].apply(norm)
     frac = st_norm.str.extract(r"^(\d+)\s*/\s*(\d+)$")
-    P["Field done"] = (st_norm.isin(DONE_FIELD) | (frac[0].notna() & frac[0].eq(frac[1]))
-                       | ((P["Nghiệp vụ"] == "Plus") & P["performed"].astype(bool)))
+    # "Đã up" = Field đã upload plan ít nhất một lần (có ngày thực hiện, hoặc status done, hoặc đã vào quy trình QC).
+    # Plan bị QC trả về (status quay lại in_process) VẪN tính là đã up; kết quả QC chỉ phản ánh ở chỉ số chất lượng.
+    P["Đã up"] = (st_norm.isin(DONE_FIELD) | (frac[0].notna() & frac[0].eq(frac[1])) | P["performed"].astype(bool)
+                  | P["QC"].isin(["DONE", "REJECT", "REWORK", "PENDING_REVIEW"]))
+    P["Field done"] = P["Đã up"]
     P["QC done"] = P["QC"].eq("DONE")
     P["Hoàn thành"] = P["Field done"] & P["QC done"]
     P["Bị từ chối"] = P["QC"].isin(["REJECT", "REWORK"])
@@ -2043,6 +2046,93 @@ def sync_users_from_embedded(keys):
 
 
 # =====================================================================
+# Lịch sử plan bị QC trả về (để tính tỷ lệ sai sót của Field, không phụ thuộc việc plan đã được bổ sung sau đó)
+# =====================================================================
+REJ_FILE = DATA_DIR / "reject_history.json"
+
+
+def load_rej_hist():
+    try:
+        return json.loads(REJ_FILE.read_text("utf-8")) if REJ_FILE.exists() else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_rej_hist(h):
+    DATA_DIR.mkdir(exist_ok=True)
+    tmp = REJ_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(h, ensure_ascii=False), "utf-8")
+    tmp.replace(REJ_FILE)
+
+
+def update_reject_history(P):
+    """Ghi nhận plan đang bị trả về; khi plan được bổ sung xong thì đóng lại nhưng vẫn giữ trong lịch sử (số lần trả về)."""
+    if P is None or P.empty:
+        return load_rej_hist()
+    cur = P[P["Bị từ chối"]]
+    cur_names = set(cur["Tên Plan"])
+    present = set(P["Tên Plan"])
+    now = _now_iso()
+    try:
+        with _log_lock():
+            h = load_rej_hist()
+            ch = False
+            for name, store_, who, item in zip(cur["Tên Plan"], cur["store"], cur["Field name"], cur["Hạng mục"]):
+                e = h.get(name)
+                if e is None:
+                    h[name] = {"first": now, "last": now, "times": 1, "open": True, "store": store_, "who": clean_name(who), "item": item}
+                    ch = True
+                elif not e.get("open"):
+                    e["times"] = int(e.get("times", 1)) + 1
+                    e["open"], e["last"] = True, now
+                    ch = True
+            for name, e in h.items():
+                if e.get("open") and name in present and name not in cur_names:
+                    e["open"], e["resolved"] = False, now
+                    ch = True
+            if ch:
+                _save_rej_hist(h)
+            return h
+    except OSError:
+        return load_rej_hist()
+
+
+def mark_returned(P):
+    """Thêm 'Số lần bị trả về' / 'Từng bị trả về' cho từng plan (gồm cả plan đang bị trả về và plan đã từng bị trả về rồi bổ sung)."""
+    h = update_reject_history(P)
+    P = P.copy()
+    P["Số lần bị trả về"] = P["Tên Plan"].map(lambda n: int(h.get(n, {}).get("times", 0)))
+    P.loc[P["Bị từ chối"] & (P["Số lần bị trả về"] < 1), "Số lần bị trả về"] = 1
+    P["Từng bị trả về"] = P["Số lần bị trả về"] > 0
+    return P
+
+
+def rej_hist_csv():
+    h = load_rej_hist()
+    rows = [{"plan": k, **{c: v.get(c, "") for c in ("first", "last", "times", "open", "store", "who", "item", "resolved")}} for k, v in h.items()]
+    return pd.DataFrame(rows, columns=["plan", "first", "last", "times", "open", "store", "who", "item", "resolved"]).to_csv(index=False).encode("utf-8")
+
+
+def merge_rej_hist(csv_bytes):
+    df = pd.read_csv(io.BytesIO(csv_bytes), dtype=str).fillna("")
+    n = 0
+    with _log_lock():
+        h = load_rej_hist()
+        for _, r in df.iterrows():
+            k = str(r.get("plan", "")).strip()
+            if not k:
+                continue
+            e = h.setdefault(k, {"first": r.get("first", ""), "last": r.get("last", ""), "times": 0, "open": False,
+                                 "store": r.get("store", ""), "who": r.get("who", ""), "item": r.get("item", "")})
+            e["times"] = max(int(e.get("times", 0)), int(float(r.get("times") or 0)))
+            if r.get("first"):
+                e["first"] = min([x for x in (e.get("first"), r.get("first")) if x])
+            n += 1
+        _save_rej_hist(h)
+    return n
+
+
+# =====================================================================
 # Phân luồng cửa hàng -> Lead (Admin xác nhận). Lưu data/store_lead_override.csv (hoặc store_lead_override.csv trên GitHub)
 # =====================================================================
 STORE_OVR_FILE = find_file("store_lead_override.csv")
@@ -2242,7 +2332,7 @@ if AUTH_ON:
 _chips.append(chip(f"v{APP_VERSION}", ""))
 st.markdown(
     f'<div class="hero"><div><div class="hero-title">CellphoneS Audit Control Tower</div>'
-    f'<div class="hero-sub">{VIEW_TITLE[view]} · Trade CPS/DTV · Plus · Mystery · CAMPUS · Trả bài · QC</div></div>'
+    f'<div class="hero-sub">{VIEW_TITLE[view]} · {"Trade CPS · Plus · Trả bài · QC" if view == "📌 LẦN 2" else "Trade CPS/DTV · Plus · Mystery · CAMPUS · Trả bài · QC"}</div></div>'
     f'<div class="chips">{"".join(_chips)}</div></div>', unsafe_allow_html=True)
 
 
@@ -2263,7 +2353,8 @@ def add_overdue(P):
     ref = upd.max()
     ref = ref.normalize() if pd.notna(ref) else pd.Timestamp.now().normalize()
     P["Ngày trả về"] = upd.dt.normalize()
-    P["Số ngày chưa bổ sung"] = (ref - P["Ngày trả về"]).dt.days.clip(lower=0).fillna(0).astype(int)
+    ref_row = pd.to_datetime(P["_src_ref"], errors="coerce").dt.normalize().fillna(ref) if "_src_ref" in P.columns else ref
+    P["Số ngày chưa bổ sung"] = (ref_row - P["Ngày trả về"]).dt.days.clip(lower=0).fillna(0).astype(int)
     P["Quá hạn"] = P["Bị từ chối"] & (P["Số ngày chưa bổ sung"] > OVERDUE_DAYS)
     P["Ngày dữ liệu"] = ref
     return P
@@ -2320,35 +2411,55 @@ def tab_overview(P, cps_m, dtv_m, my_m, ls, label, n_alert=0, n_low=0, n_over=0,
     if n_low:
         st.warning(f"⚠️ Có {n_low} nhân viên phỏng vấn dưới {THR}% điểm cần follow, trả bài ở kỳ tiếp theo. "
                    "Bấm chuông 🔔 hoặc mở tab 'Trả bài Plus'.")
+    l2 = label == "Lần 2"  # Lần 2 chỉ có Trade Audit (CPS) và Audit Plus
     plus = P[P["Nghiệp vụ"] == "Plus"]
     my_t = my_m[~my_m["Ngoài DS giao"]]
     cd, ct = int(cps_m["_done"].sum()), len(cps_m)
     dd, dt = int(dtv_m["_done"].sum()), len(dtv_m)
     md, mt = int(my_t["_done"].sum()), len(my_t)
     pdn, pt = int(plus["Hoàn thành"].sum()), len(plus)
-    cards = [
-        kpi_card("CPS – đủ 4 hạng mục", f"{cd}/{ct}", "cửa hàng đã hoàn thành", pct(cd, ct)),
-        kpi_card("DTV – đủ hạng mục", f"{dd}/{dt}", "cửa hàng đã hoàn thành", pct(dd, dt)) if (label == "Lần 1" and dt)
-        else kpi_card("DTV", "—", "Lần 2 không áp dụng" if label == "Lần 2" else "Không có cửa hàng DTV"),
-        kpi_card("Plus – plan hoàn thành", f"{pdn}/{pt}", "Field và QC đều đã xong", pct(pdn, pt)),
-        kpi_card("Mystery – cửa hàng hoàn tất", f"{md}/{mt}", "trên tổng số cửa hàng được giao", pct(md, mt)),
-        kpi_card("Plan bị từ chối", int(P["Bị từ chối"].sum()), "cần chấm lại / bổ sung", None, bad=True),
-        kpi_card("QC chưa chấm", int((P["_st"] == "WAIT_QC").sum()), "plan Field xong, chờ QC viên", None, bad=True),
-    ]
+    up_lead = upload_by_lead(P)
+    sp_o = store_progress_df(P)
+    sp_cps = sp_o[sp_o["Hệ thống"] == "CPS"] if not sp_o.empty else sp_o
+    n_up_full = int((sp_cps["up_stt"] == "UP_FULL").sum()) if len(sp_cps) else 0
+    pp_o = P[P["Nghiệp vụ"].isin(["Trade", "Plus"]) & P["Hệ thống"].isin(["CPS", "DTV"])]
+    up_pl, ev_pl = int(pp_o["Đã up"].sum()), int(pp_o["Từng bị trả về"].sum()) if "Từng bị trả về" in pp_o.columns else int(pp_o["Bị từ chối"].sum())
+    err_o = pct(ev_pl, up_pl)
+    cards = [kpi_card("CPS – Field đã up đủ", f"{n_up_full}/{len(sp_cps)}", "cửa hàng Field up đủ 4 hạng mục + Plus", pct(n_up_full, len(sp_cps))),
+             kpi_card("CPS – QC đã duyệt đủ", f"{cd}/{ct}", "cửa hàng đạt đủ 4 hạng mục", pct(cd, ct))]
+    if not l2:
+        cards.append(kpi_card("DTV – đủ hạng mục", f"{dd}/{dt}", "cửa hàng đã hoàn thành", pct(dd, dt)) if dt
+                     else kpi_card("DTV", "—", "Không có cửa hàng DTV"))
+    cards.append(kpi_card("Plus – plan hoàn thành", f"{pdn}/{pt}", "Field và QC đều đã xong", pct(pdn, pt)))
+    if not l2:
+        cards.append(kpi_card("Mystery – cửa hàng hoàn tất", f"{md}/{mt}", "trên tổng số cửa hàng được giao", pct(md, mt)))
+    cards += [kpi_card("Tỷ lệ sai sót của Field", "—" if pd.isna(err_o) else f"{err_o:.1f}%", f"{ev_pl}/{up_pl} plan đã up từng bị QC trả về", None,
+                       bad=bool(not pd.isna(err_o) and err_o >= 10)),
+              kpi_card("Plan bị từ chối", int(P["Bị từ chối"].sum()), "cần chấm lại / bổ sung", None, bad=True),
+              kpi_card("QC chưa chấm", int((P["_st"] == "WAIT_QC").sum()), "plan Field xong, chờ QC viên", None, bad=True)]
     st.markdown('<div class="kpi-row">' + "".join(cards) + "</div>", unsafe_allow_html=True)
 
     section("Scorecard theo Lead", "KPI = số cửa hàng Lead đang quản lý · Xanh ≥ 80% · Cam 50–80% · Đỏ < 50%")
-    lead_cards(ls)
+    lead_cards(ls, "CPS" if l2 else "CPS + DTV + Mystery")
+    if not up_lead.empty:
+        section("Tiến độ upload của Field theo Lead",
+                "Đã up = Field đã upload (plan bị QC trả về vẫn tính đã up) · Chưa up (0) = chưa up lần nào · Sai sót = plan từng bị QC trả về / plan đã up")
+        show_df(up_lead, column_config=PCT_CFG(["% cửa hàng up đủ", "% plan đã up", "Tỷ lệ sai sót %"]))
     section("Bảng số liệu theo Lead")
-    pcols = ["% CPS", "% DTV", "% Mystery", "% Plus", "% KPI tổng (CPS+DTV+Mystery)"]
+    if l2:  # Lần 2: bỏ cột DTV / Mystery
+        ls = ls.drop(columns=[c for c in ls.columns if c.startswith("DTV") or c.startswith("Mystery") or c in ("% DTV", "% Mystery")]).rename(
+            columns={"% KPI tổng (CPS+DTV+Mystery)": "% KPI tổng (CPS)"})
+        pcols = ["% CPS", "% Plus", "% KPI tổng (CPS)"]
+        vv = ["CPS (cửa hàng)", "CPS hoàn thành"]
+    else:
+        pcols = ["% CPS", "% DTV", "% Mystery", "% Plus", "% KPI tổng (CPS+DTV+Mystery)"]
+        vv = ["CPS (cửa hàng)", "CPS hoàn thành", "DTV (cửa hàng)", "DTV hoàn thành", "Mystery (giao)", "Mystery hoàn tất"]
     show_df(ls, column_config=PCT_CFG(pcols))
     if ls.empty:
         return
     a, b = st.columns(2)
     with a:
-        long = ls.melt(id_vars="Lead", value_vars=["CPS (cửa hàng)", "CPS hoàn thành", "DTV (cửa hàng)", "DTV hoàn thành",
-                                                  "Mystery (giao)", "Mystery hoàn tất"],
-                       var_name="Chỉ tiêu", value_name="Số lượng")
+        long = ls.melt(id_vars="Lead", value_vars=vv, var_name="Chỉ tiêu", value_name="Số lượng")
         bar_chart(long, "Lead", "Số lượng", "Số cửa hàng được giao và đã hoàn thành", color="Chỉ tiêu")
     with b:
         long = ls.melt(id_vars="Lead", value_vars=pcols, var_name="Hạng mục", value_name="%")
@@ -2417,20 +2528,20 @@ def tab_plus(P):
         g = t[t["Hạng mục"] == it]
         if g.empty and it not in PLUS_ITEMS:
             continue
-        rows.append({"Hạng mục": it, "Tổng plan": len(g), "Field xong": int(g["Field done"].sum()),
+        rows.append({"Hạng mục": it, "Tổng plan": len(g), "Field đã up": int(g["Field done"].sum()),
                      "QC duyệt xong": int(g["QC done"].sum()), "Hoàn thành (Field + QC)": int(g["Hoàn thành"].sum()),
                      "Chờ QC": int((g["_st"] == "WAIT_QC").sum()), "Bị từ chối": int(g["Bị từ chối"].sum())})
     s = pd.DataFrame(rows)
     c = st.columns(4)
     c[0].metric("Tổng số plan Plus", len(t))
-    c[1].metric("Field đã xong", int(t["Field done"].sum()))
+    c[1].metric("Field đã up", int(t["Field done"].sum()))
     c[2].metric("QC đã duyệt xong", int(t["QC done"].sum()))
     c[3].metric("Bị từ chối", int(t["Bị từ chối"].sum()))
     section("Tiến độ Plus 1 → Plus 5")
     show_df(s)
     a, b = st.columns(2)
     with a:
-        bar_chart(s, "Hạng mục", ["Field xong", "QC duyệt xong", "Hoàn thành (Field + QC)", "Bị từ chối"],
+        bar_chart(s, "Hạng mục", ["Field đã up", "QC duyệt xong", "Hoàn thành (Field + QC)", "Bị từ chối"],
                   "Tiến độ từng Plus")
     with b:
         cnt = t["_st"].map(STATUS_LABEL).value_counts()
@@ -2447,11 +2558,13 @@ def tab_plus(P):
         show_df(rej, height=400, column_config={"Lý do từ chối": st.column_config.TextColumn(width="large")})
 
 
-def tab_mystery(M, P, sheets):
+def tab_mystery(M, P, sheets, mys_src=""):
     if "Mystery Audit" not in sheets:
         st.warning("Raw data không có sheet Mystery (tên sheet cần chứa chữ 'Mystery'). "
                    f"Các sheet đọc được: {', '.join(sheets) or 'không có'}.")
         return
+    if mys_src:
+        st.info(f"Dữ liệu Mystery lấy từ file {mys_src} (file của đợt này không có sheet Mystery). Mystery không theo đợt, nên số liệu là của lần xuất gần nhất có sheet này.")
     if not FLAGS_OK:
         st.warning("File store_master.csv đang thiếu cột Mystery nên chưa biết đâu là 125 cửa hàng được giao. "
                    "Tạm tính mọi cửa hàng có plan Mystery là cửa hàng được giao. "
@@ -2660,7 +2773,7 @@ def tab_validation(P, bundle, label):
     n_l2 = int((stores["L2"] == "Có").sum()) if not stores.empty else 0
     checks = [("Sheet Trade Audit", "Có" if "Trade Audit" in sheets else "THIẾU"),
               ("Sheet Trade Audit Plus", "Có" if "Trade Audit Plus" in sheets else "THIẾU"),
-              ("Sheet Mystery Audit", "Có" if "Mystery Audit" in sheets else "THIẾU"),
+              ("Sheet Mystery Audit", "Không áp dụng (Lần 2)" if label == "Lần 2" else ("Có" if "Mystery Audit" in sheets else "THIẾU")),
               ("Các giá trị cột Chấm trong file", ", ".join(bundle["rounds"]) or "không có"),
               ("Số cửa hàng trong danh sách (store_master.csv)", len(stores)),
               ("Số cửa hàng được gắn cờ Mystery (cần = 125)", n_flag if n_flag else "THIẾU – cần upload store_master.csv bản mới"),
@@ -2820,26 +2933,31 @@ def editor(df, **kw):
         return st.data_editor(df, hide_index=True, **kw)
 
 
-PLUS_MIN = 2  # cửa hàng CPS hoàn thành khi đủ 4 hạng mục và từ 2 bài Plus hoàn thành trở lên
-STORE_STATUS = {"DONE": ("✅ Hoàn thành", "ok"), "REJECT": ("❌ Cần bổ sung", "bad"),
-                "PROGRESS": ("🕓 Đang thực hiện", "warn"), "NOT_STARTED": ("⏳ Chưa thực hiện", "idle")}
+PLUS_MIN = 2  # cửa hàng CPS cần đủ 4 hạng mục và từ 2 bài Plus trở lên
+STORE_STATUS = {"DONE": ("✅ QC đã duyệt đủ", "ok"), "REJECT": ("❌ Có plan bị QC trả về", "bad"),
+                "PROGRESS": ("🕓 Đã up, chờ QC", "warn"), "NOT_STARTED": ("⏳ Chưa up", "idle")}
+UP_STATUS = {"UP_FULL": ("📤 Đã up đủ", "ok"), "UP_PART": ("📤 Đang up dở", "warn"), "UP_NONE": ("⏳ Chưa up (0)", "idle")}
 STORE_ORDER = {"REJECT": 0, "PROGRESS": 1, "NOT_STARTED": 2, "DONE": 3}
 ITEM_ICON = {"DONE": "✅", "REJECT": "❌", "WAIT_QC": "🕓", "NOT_FIELD": "⏳", "NONE": "▫️"}
 ITEM_CLS = {"DONE": "ok", "REJECT": "bad", "WAIT_QC": "warn", "NOT_FIELD": "idle", "NONE": "idle"}
-ITEM_TEXT = {"DONE": "hoàn thành", "REJECT": "bị từ chối", "WAIT_QC": "chờ QC duyệt", "NOT_FIELD": "chưa làm xong",
+ITEM_TEXT = {"DONE": "QC đã duyệt", "REJECT": "đã up, QC trả về", "WAIT_QC": "đã up, chờ QC", "NOT_FIELD": "chưa up",
              "NONE": "chưa có plan"}
 SP_COLS = ["store", "Địa chỉ", "Lead", "Hệ thống", "stt", "Trạng thái", "comp", "Plus hoàn thành", "Plus chờ QC",
-           "Plus bị từ chối", "Plus tổng", "Plus cần", "Còn thiếu", "Người thực hiện"]
+           "Plus bị từ chối", "Plus tổng", "Plus cần", "Còn thiếu", "Người thực hiện", "up_stt", "Trạng thái up",
+           "HM đã up", "HM tổng", "Plus đã up", "Bị trả về", "Chưa up"]
 
 
 def store_progress_df(Pall):
-    """Tiến độ theo cửa hàng (CPS / DTV). CPS hoàn thành = đủ 4 hạng mục (Field + QC xong) và từ PLUS_MIN bài Plus hoàn thành;
-    các bài Plus còn lại giữ nguyên trạng thái. DTV hoàn thành = hạng mục Trade Audit DTV hoàn thành."""
+    """Tiến độ theo cửa hàng (CPS / DTV) theo HAI trục độc lập:
+    - Upload của Field: đã up đủ = đủ 4 hạng mục CPS (hoặc hạng mục DTV) và từ PLUS_MIN bài Plus đã up. Plan bị QC trả về VẪN tính đã up.
+    - Kết quả QC: QC đã duyệt đủ cùng điều kiện đó; plan bị trả về được đếm riêng."""
     t = Pall[Pall["Nghiệp vụ"].isin(["Trade", "Plus"]) & Pall["Hệ thống"].isin(["CPS", "DTV"])]
     if t.empty:
         return pd.DataFrame(columns=SP_COLS)
-    best = pick_best(t[t["Nghiệp vụ"] == "Trade"])
+    tr = t[t["Nghiệp vụ"] == "Trade"]
+    best = pick_best(tr)
     bm = {(r["store"], r["Hạng mục"]): r for _, r in best.iterrows()}
+    up_item = tr.groupby(["store", "Hạng mục"])["Đã up"].any().to_dict()
     plus_by = {k: g for k, g in t[t["Nghiệp vụ"] == "Plus"].groupby("store")}
     rows = []
     for code, g in t.groupby("store"):
@@ -2848,32 +2966,41 @@ def store_progress_df(Pall):
         comp = {}
         for it in items:
             r = bm.get((code, it))
-            comp[it] = ({"st": r["_st"], "who": clean_name(r["Field name"]), "note": r["Ghi chú QC"]} if r is not None
-                        else {"st": "NONE", "who": "", "note": ""})
+            up = bool(up_item.get((code, it), False))
+            comp[it] = ({"st": r["_st"], "who": clean_name(r["Field name"]), "note": r["Ghi chú QC"], "up": up} if r is not None
+                        else {"st": "NONE", "who": "", "note": "", "up": False})
         pg = plus_by.get(code, g.iloc[0:0])
         n_done, n_wait = int(pg["Hoàn thành"].sum()), int((pg["_st"] == "WAIT_QC").sum())
-        n_rej, n_tot = int(pg["Bị từ chối"].sum()), len(pg)
+        n_rej, n_tot, n_up = int(pg["Bị từ chối"].sum()), len(pg), int(pg["Đã up"].sum())
         need = PLUS_MIN if system == "CPS" else 0
         plus_ok = n_done >= need
         all_items = all(v["st"] == "DONE" for v in comp.values())
         rejected = any(v["st"] == "REJECT" for v in comp.values()) or (not plus_ok and n_rej > 0)
         started = any(v["st"] in ("DONE", "WAIT_QC", "REJECT") for v in comp.values()) or (n_done + n_wait + n_rej) > 0
         stt = "DONE" if (all_items and plus_ok) else "REJECT" if rejected else "PROGRESS" if started else "NOT_STARTED"
+        items_up = sum(1 for v in comp.values() if v["up"])
+        up_stt = "UP_FULL" if (items_up == len(items) and n_up >= need) else ("UP_PART" if (items_up or n_up) else "UP_NONE")
+        not_up = [it for it, v in comp.items() if not v["up"]]
+        if n_up < need:
+            not_up.append(f"Plus (mới up {n_up}/{need})")
         missing = [f"{it}: {ITEM_TEXT[v['st']]}" for it, v in comp.items() if v["st"] != "DONE"]
         if not plus_ok:
-            extra = (f", {n_wait} chờ QC" if n_wait else "") + (f", {n_rej} bị từ chối" if n_rej else "")
-            missing.append(f"Plus: mới {n_done}/{need} bài hoàn thành{extra}")
+            extra = (f", {n_wait} chờ QC" if n_wait else "") + (f", {n_rej} bị trả về" if n_rej else "")
+            missing.append(f"Plus: mới {n_done}/{need} bài QC đã duyệt{extra}")
         rows.append({"store": code, "Địa chỉ": g["Địa chỉ"].iloc[0], "Lead": g["Lead"].iloc[0], "Hệ thống": system, "stt": stt,
                      "Trạng thái": STORE_STATUS[stt][0], "comp": comp, "Plus hoàn thành": n_done, "Plus chờ QC": n_wait,
                      "Plus bị từ chối": n_rej, "Plus tổng": n_tot, "Plus cần": need, "Còn thiếu": " · ".join(missing),
-                     "Người thực hiện": ", ".join(sorted({clean_name(x) for x in g["Field name"] if clean_name(x)}))})
+                     "Người thực hiện": ", ".join(sorted({clean_name(x) for x in g["Field name"] if clean_name(x)})),
+                     "up_stt": up_stt, "Trạng thái up": UP_STATUS[up_stt][0], "HM đã up": items_up, "HM tổng": len(items),
+                     "Plus đã up": n_up, "Bị trả về": int(g["Bị từ chối"].sum()), "Chưa up": ", ".join(not_up)})
     out = pd.DataFrame(rows, columns=SP_COLS)
-    out["_o"] = out["stt"].map(STORE_ORDER)
+    out["_o"] = out["up_stt"].map({"UP_NONE": 0, "UP_PART": 1, "UP_FULL": 2}) * 10 + out["stt"].map(STORE_ORDER)
     return out.sort_values(["_o", "store"]).drop(columns="_o").reset_index(drop=True)
 
 
 def store_card_html(r, me):
-    label, cls = STORE_STATUS[r["stt"]]
+    up_label, up_cls = UP_STATUS[r["up_stt"]]
+    qc_label, qc_cls = STORE_STATUS[r["stt"]]
     chips, others = [], []
     for it, v in r["comp"].items():
         txt = f"{it} {ITEM_ICON[v['st']]}"
@@ -2881,39 +3008,61 @@ def store_card_html(r, me):
             others.append(f"{it} ({v['who']})")
         chips.append(f'<span class="sc {ITEM_CLS[v["st"]]}">{html.escape(txt)}</span>')
     if r["Plus cần"]:
-        ok = r["Plus hoàn thành"] >= r["Plus cần"]
-        pc = "ok" if ok else ("bad" if r["Plus bị từ chối"] else "warn")
-        chips.append(f'<span class="sc {pc}">Plus {r["Plus hoàn thành"]}/{r["Plus cần"]}+ {"✅" if ok else "⏳"}</span>')
+        ok = r["Plus đã up"] >= r["Plus cần"]
+        chips.append(f'<span class="sc {"ok" if ok else "warn"}">Plus up {r["Plus đã up"]}/{r["Plus cần"]}+ {"📤" if ok else "⏳"}</span>')
     plus_line = ""
     if r["Plus cần"]:
-        bits = [f'{r["Plus hoàn thành"]} hoàn thành']
-        if r["Plus chờ QC"]:
-            bits.append(f'{r["Plus chờ QC"]} chờ QC')
+        bits = [f'{r["Plus đã up"]} đã up', f'{r["Plus hoàn thành"]} QC đã duyệt']
         if r["Plus bị từ chối"]:
-            bits.append(f'{r["Plus bị từ chối"]} bị từ chối')
+            bits.append(f'{r["Plus bị từ chối"]} bị trả về')
         plus_line = f'<div class="splus">Bài Plus: {" · ".join(bits)} / {r["Plus tổng"]} bài</div>'
-    miss = ('<div class="smiss ok">Đủ điều kiện hoàn thành (các bài Plus còn lại giữ nguyên trạng thái).</div>'
-            if r["stt"] == "DONE" else f'<div class="smiss">Còn thiếu: {html.escape(r["Còn thiếu"])}</div>')
+    upl = (f'<div class="splus">Đã up: <b>{r["HM đã up"]}/{r["HM tổng"]}</b> hạng mục'
+           + (f' · Plus {r["Plus đã up"]}/{r["Plus cần"]}+' if r["Plus cần"] else "") + "</div>")
+    notup = (f'<div class="smiss">Chưa up: {html.escape(r["Chưa up"])}</div>' if r["Chưa up"] else
+             '<div class="smiss ok">Đã up đủ yêu cầu của cửa hàng.</div>')
+    ret = f'<div class="smiss">QC đang trả về {r["Bị trả về"]} plan, cần sửa và up lại.</div>' if r["Bị trả về"] else ""
     oth = f'<div class="sother">Do người khác thực hiện: {html.escape(", ".join(others))}</div>' if others else ""
     addr = f'<div class="saddr">{html.escape(str(r["Địa chỉ"]))}</div>' if r["Địa chỉ"] else ""
-    return (f'<div class="scard {cls}"><div class="shead"><span class="scode">{html.escape(r["store"])}</span>'
-            f'<span class="sbadge {cls}">{label}</span></div>{addr}<div class="schips">{"".join(chips)}</div>'
-            f'{plus_line}{miss}{oth}</div>')
+    card_cls = "bad" if r["Bị trả về"] else up_cls
+    return (f'<div class="scard {card_cls}"><div class="shead"><span class="scode">{html.escape(r["store"])}</span>'
+            f'<span class="sbadge {up_cls}">{up_label}</span></div>{addr}'
+            f'<div class="shead" style="margin-top:6px"><span class="sbadge {qc_cls}">{qc_label}</span></div>'
+            f'<div class="schips">{"".join(chips)}</div>{upl}{plus_line}{notup}{ret}{oth}</div>')
 
 
 def store_export_df(sp):
     rows = []
     for _, r in sp.iterrows():
         d = {"Mã cửa hàng": r["store"], "Địa chỉ cửa hàng": r["Địa chỉ"], "Lead": r["Lead"], "Hệ thống": r["Hệ thống"],
-             "Trạng thái": r["Trạng thái"]}
+             "Trạng thái upload": r["Trạng thái up"], "Trạng thái QC": r["Trạng thái"]}
         for it, v in r["comp"].items():
             d[it] = f"{ITEM_ICON[v['st']]} {ITEM_TEXT[v['st']]}" + (f" ({v['who']})" if v["who"] else "")
-        d.update({"Plus hoàn thành": r["Plus hoàn thành"], "Plus chờ QC": r["Plus chờ QC"], "Plus bị từ chối": r["Plus bị từ chối"],
-                  "Plus tổng": r["Plus tổng"], "Còn thiếu": r["Còn thiếu"] or "Đủ điều kiện", "Người thực hiện": r["Người thực hiện"]})
+        d.update({"Hạng mục đã up": f'{r["HM đã up"]}/{r["HM tổng"]}', "Plus đã up": r["Plus đã up"], "Plus QC đã duyệt": r["Plus hoàn thành"],
+                  "Plan đang bị trả về": r["Bị trả về"], "Chưa up": r["Chưa up"] or "Đã up đủ",
+                  "Người thực hiện": r["Người thực hiện"]})
         rows.append(d)
     df = pd.DataFrame(rows)
-    first = ["Mã cửa hàng", "Địa chỉ cửa hàng", "Lead", "Hệ thống", "Trạng thái"] + [c for c in CPS_ITEMS + DTV_ITEMS if c in df.columns]
+    first = ["Mã cửa hàng", "Địa chỉ cửa hàng", "Lead", "Hệ thống", "Trạng thái upload", "Trạng thái QC"] + [c for c in CPS_ITEMS + DTV_ITEMS if c in df.columns]
     return df[first + [c for c in df.columns if c not in first]] if len(df) else df
+
+
+def upload_by_lead(P):
+    """Tiến độ upload của Field theo Lead: cửa hàng chưa up / up dở / up đủ, QC đã duyệt, và tỷ lệ sai sót (plan từng bị QC trả về / plan đã up)."""
+    sp = store_progress_df(P)
+    if sp.empty:
+        return pd.DataFrame()
+    pp = P[P["Nghiệp vụ"].isin(["Trade", "Plus"]) & P["Hệ thống"].isin(["CPS", "DTV"])]
+    rows = []
+    for ld, g in sp.groupby("Lead"):
+        pl = pp[pp["Lead"] == ld]
+        up, ev = int(pl["Đã up"].sum()), int(pl["Từng bị trả về"].sum()) if "Từng bị trả về" in pl.columns else int(pl["Bị từ chối"].sum())
+        rows.append({"Lead": ld, "Cửa hàng": len(g), "Chưa up (0)": int((g["up_stt"] == "UP_NONE").sum()),
+                     "Đang up dở": int((g["up_stt"] == "UP_PART").sum()), "Đã up đủ": int((g["up_stt"] == "UP_FULL").sum()),
+                     "% cửa hàng up đủ": pct(int((g["up_stt"] == "UP_FULL").sum()), len(g)),
+                     "QC đã duyệt đủ": int((g["stt"] == "DONE").sum()), "Có plan bị trả về": int((g["Bị trả về"] > 0).sum()),
+                     "Plan được giao": len(pl), "Plan đã up": up, "% plan đã up": pct(up, len(pl)),
+                     "Plan từng bị trả về": ev, "Tỷ lệ sai sót %": pct(ev, up)})
+    return pd.DataFrame(rows)
 
 
 def tab_field_staff(P):
@@ -2922,55 +3071,84 @@ def tab_field_staff(P):
     acct = name_email_map() if AUTH_ON else {}
     reqs = load_requests()
     open_by = pd.Series([norm(r.get("to_name", "")) for r in reqs if r.get("status") == "Mở"], dtype=str).value_counts().to_dict()
+    if "Từng bị trả về" not in t.columns:
+        t = t.assign(**{"Từng bị trả về": t["Bị từ chối"]})
     t = t.assign(_n=t["Field name"].fillna("").astype(str).str.strip().replace("", "(chưa gán)"))
     g = t.groupby("_n").agg(**{
-        "Tổng plan": ("Tên Plan", "size"), "Hoàn thành": ("Hoàn thành", "sum"),
-        "Chờ QC": ("_st", lambda s: int((s == "WAIT_QC").sum())), "Bị từ chối": ("Bị từ chối", "sum"),
-        "Chưa Field xong": ("_st", lambda s: int((s == "NOT_FIELD").sum()))}).reset_index().rename(columns={"_n": "Nhân sự Field"})
+        "Plan được giao": ("Tên Plan", "size"), "Plan đã up": ("Đã up", "sum"), "QC đã duyệt": ("Hoàn thành", "sum"),
+        "Chờ QC": ("_st", lambda s: int((s == "WAIT_QC").sum())), "Đang bị trả về": ("Bị từ chối", "sum"),
+        "Từng bị trả về": ("Từng bị trả về", "sum"),
+        "Chưa up": ("_st", lambda s: int((s == "NOT_FIELD").sum()))}).reset_index().rename(columns={"_n": "Nhân sự Field"})
     scope_lead = MY_LEAD or (selected_leader if selected_leader != "Tất cả" else "")
     if AUTH_ON and not users.empty:  # thêm tài khoản Field thuộc Lead nhưng chưa có plan nào
         mine = users[(users["role"] == "field") & ((users["lead"] == scope_lead) if scope_lead else True)]
         have = {norm(x) for x in g["Nhân sự Field"]}
-        extra = [{"Nhân sự Field": r["display_name"], "Tổng plan": 0, "Hoàn thành": 0, "Chờ QC": 0, "Bị từ chối": 0,
-                  "Chưa Field xong": 0} for _, r in mine.iterrows() if norm(r["display_name"]) not in have]
+        extra = [{"Nhân sự Field": r["display_name"], "Plan được giao": 0, "Plan đã up": 0, "QC đã duyệt": 0, "Chờ QC": 0,
+                  "Đang bị trả về": 0, "Từng bị trả về": 0, "Chưa up": 0}
+                 for _, r in mine.iterrows() if norm(r["display_name"]) not in have]
         if extra:
             g = pd.concat([g, pd.DataFrame(extra).drop_duplicates("Nhân sự Field")], ignore_index=True)
     if g.empty:
         st.info("Chưa có nhân sự Field nào để hiển thị.")
         return
     sp_all = store_progress_df(P)
-    st_stt = dict(zip(sp_all["store"], sp_all["stt"]))
+    up_s, qc_s = dict(zip(sp_all["store"], sp_all["up_stt"])), dict(zip(sp_all["store"], sp_all["stt"]))
     tt = t[t["Nghiệp vụ"].isin(["Trade", "Plus"]) & t["Hệ thống"].isin(["CPS", "DTV"])]
     owned = tt.groupby("_n")["store"].agg(lambda x: set(x)).to_dict()
-    g.insert(1, "Cửa hàng được giao", g["Nhân sự Field"].map(lambda n: len(owned.get(n, ()))))
-    g.insert(2, "Cửa hàng hoàn thành", g["Nhân sự Field"].map(lambda n: sum(1 for c in owned.get(n, ()) if st_stt.get(c) == "DONE")))
-    g.insert(3, "% cửa hàng hoàn thành", [pct(a, b) if b else np.nan for a, b in zip(g["Cửa hàng hoàn thành"], g["Cửa hàng được giao"])])
-    g["% hoàn thành"] = [pct(a, b) if b else np.nan for a, b in zip(g["Hoàn thành"], g["Tổng plan"])]
+    cs = g["Nhân sự Field"].map(lambda n: owned.get(n, set()))
+    g.insert(1, "Cửa hàng được giao", cs.map(len))
+    g.insert(2, "Cửa hàng đã up đủ", cs.map(lambda s: sum(1 for c in s if up_s.get(c) == "UP_FULL")))
+    g.insert(3, "% cửa hàng up đủ", [pct(a, b) if b else np.nan for a, b in zip(g["Cửa hàng đã up đủ"], g["Cửa hàng được giao"])])
+    g.insert(4, "Cửa hàng chưa up (0)", cs.map(lambda s: sum(1 for c in s if up_s.get(c) == "UP_NONE")))
+    g.insert(5, "Cửa hàng QC đã duyệt đủ", cs.map(lambda s: sum(1 for c in s if qc_s.get(c) == "DONE")))
+    g["% plan đã up"] = [pct(a, b) if b else np.nan for a, b in zip(g["Plan đã up"], g["Plan được giao"])]
+    g["Tỷ lệ sai sót %"] = [pct(a, b) if b else np.nan for a, b in zip(g["Từng bị trả về"], g["Plan đã up"])]
     g["Yêu cầu đang mở"] = g["Nhân sự Field"].apply(lambda n: int(open_by.get(norm(n), 0)))
     g["Tài khoản"] = g["Nhân sự Field"].apply(lambda n: acct.get(norm(n), "—"))
-    g = g.sort_values(["Tổng plan", "Nhân sự Field"], ascending=[False, True]).reset_index(drop=True)
+    g = g.sort_values(["Plan được giao", "Nhân sự Field"], ascending=[False, True]).reset_index(drop=True)
+    tot_up, tot_ev = int(g["Plan đã up"].sum()), int(g["Từng bị trả về"].sum())
     c = st.columns(4)
     c[0].metric("Nhân sự Field", len(g))
-    c[1].metric("Đang có plan", int((g["Tổng plan"] > 0).sum()))
-    c[2].metric("Plan hoàn thành", int(g["Hoàn thành"].sum()))
-    c[3].metric("Plan bị từ chối", int(g["Bị từ chối"].sum()))
-    top = g[g["Tổng plan"] > 0].head(25)
+    c[1].metric("Plan đã up", f"{tot_up} / {int(g['Plan được giao'].sum())}")
+    c[2].metric("Đang bị QC trả về", int(g["Đang bị trả về"].sum()))
+    c[3].metric("Tỷ lệ sai sót chung", "—" if not tot_up else f"{100 * tot_ev / tot_up:.1f}%")
+    st.caption("**Đã up** = Field đã upload plan ít nhất một lần; plan bị QC trả về vẫn tính đã up. "
+               "**Tỷ lệ sai sót** = plan từng bị QC trả về / plan đã up (không trừ vào số đã up).")
+    top = g[g["Plan được giao"] > 0].head(25)
     if not top.empty:
-        long = top.melt(id_vars="Nhân sự Field", value_vars=["Hoàn thành", "Chờ QC", "Bị từ chối", "Chưa Field xong"],
+        long = top.melt(id_vars="Nhân sự Field", value_vars=["QC đã duyệt", "Chờ QC", "Đang bị trả về", "Chưa up"],
                         var_name="Tình trạng", value_name="Số plan")
         fig = px.bar(long, x="Nhân sự Field", y="Số plan", color="Tình trạng", barmode="stack", text_auto=True,
-                     title="Kết quả audit từng nhân sự Field",
-                     color_discrete_map={"Hoàn thành": "#12b76a", "Chờ QC": "#f79009", "Bị từ chối": "#f04438",
-                                         "Chưa Field xong": "#98a2b3"})
+                     title="Tình trạng plan của từng nhân sự Field (Chưa up = chưa upload lần nào)",
+                     color_discrete_map={"QC đã duyệt": "#12b76a", "Chờ QC": "#f79009", "Đang bị trả về": "#f04438", "Chưa up": "#98a2b3"})
         show_chart(fig)
+        er = g[g["Plan đã up"] >= 5].sort_values("Tỷ lệ sai sót %", ascending=False).head(25)
+        if not er.empty:
+            fig2 = px.bar(er, x="Nhân sự Field", y="Tỷ lệ sai sót %", text_auto=".1f", title="Tỷ lệ sai sót của từng Field (%) – từ 5 plan đã up",
+                          color_discrete_sequence=["#f04438"])
+            show_chart(fig2)
     section("Bảng kết quả từng nhân sự Field", "Chọn một người ở bên dưới để xem chi tiết plan của họ")
-    show_df(g, height=420, column_config=PCT_CFG(["% cửa hàng hoàn thành", "% hoàn thành"]))
+    show_df(g, height=420, column_config=PCT_CFG(["% cửa hàng up đủ", "% plan đã up", "Tỷ lệ sai sót %"]))
     pick = st.selectbox("Xem chi tiết plan của", ["—"] + g["Nhân sự Field"].tolist(), key="staff_pick")
     if pick != "—":
         d = t[t["_n"] == pick]
         show_df(pd.DataFrame({"Nghiệp vụ": d["Nghiệp vụ"], "Mã cửa hàng": d["store"], "Hạng mục": d["Hạng mục"],
                               "Tên plan": d["Tên Plan"], "Tình trạng": d["_st"].map(STATUS_LABEL),
+                              "Số lần bị trả về": d["Số lần bị trả về"] if "Số lần bị trả về" in d.columns else 0,
                               "Lý do / ghi chú QC": d["Ghi chú QC"]}), height=320)
+    if IS_ADMIN:
+        with st.expander("Lịch sử plan bị QC trả về (dùng để tính tỷ lệ sai sót)"):
+            st.caption("App ghi nhận mỗi plan khi bị trả về nên tỷ lệ sai sót không mất khi Field đã bổ sung. Lịch sử lưu trên máy chủ "
+                       "và mất khi app khởi động lại: tải về định kỳ, sau khi khởi động lại nạp lại vào ô bên dưới.")
+            h1, h2 = st.columns(2)
+            h1.download_button("💾 Tải lịch sử trả bài (CSV)", data=rej_hist_csv(), file_name="reject_history.csv", mime="text/csv", key="rh_dl")
+            up_rh = h2.file_uploader("Nạp lại lịch sử (CSV đã tải)", type=["csv"], key="rh_up")
+            if up_rh is not None and st.session_state.get("_rh_up_name") != (up_rh.name, up_rh.size):
+                try:
+                    st.success(f"Đã nạp lịch sử của {merge_rej_hist(up_rh.getvalue())} plan.")
+                    st.session_state["_rh_up_name"] = (up_rh.name, up_rh.size)
+                except Exception as e:  # noqa: BLE001
+                    st.error(f"File không đúng định dạng: {e}")
 
 
 REQ_KINDS = {"Bị từ chối / yêu cầu bổ sung": "REJ", "Đã Field xong – chờ QC duyệt": "WAIT_QC",
@@ -3098,16 +3276,16 @@ def tab_requests(P):
 def field_stores_tab(sp):
     me = MY_NAMES
     f1, f2 = st.columns([3, 2])
-    flt = f1.radio("Hiển thị", ["Tất cả", "Chưa hoàn thành", "Cần bổ sung", "Đang thực hiện", "Chưa thực hiện", "Đã hoàn thành"],
+    flt = f1.radio("Hiển thị", ["Tất cả", "Chưa up (0)", "Đang up dở", "Đã up đủ", "Đang bị QC trả về", "QC đã duyệt đủ"],
                    horizontal=True, key="fld_sfilter")
     q = f2.text_input("🔎 Tìm mã cửa hàng", key="fld_sq", placeholder="Dán 1 hoặc nhiều mã, cách nhau bằng dấu phẩy")
-    keep = {"Tất cả": None, "Chưa hoàn thành": ["REJECT", "PROGRESS", "NOT_STARTED"], "Cần bổ sung": ["REJECT"],
-            "Đang thực hiện": ["PROGRESS"], "Chưa thực hiện": ["NOT_STARTED"], "Đã hoàn thành": ["DONE"]}[flt]
-    d = sp if keep is None else sp[sp["stt"].isin(keep)]
+    d = {"Tất cả": sp, "Chưa up (0)": sp[sp["up_stt"] == "UP_NONE"], "Đang up dở": sp[sp["up_stt"] == "UP_PART"],
+         "Đã up đủ": sp[sp["up_stt"] == "UP_FULL"], "Đang bị QC trả về": sp[sp["Bị trả về"] > 0],
+         "QC đã duyệt đủ": sp[sp["stt"] == "DONE"]}[flt]
     d = token_filter(d, ["store", "Địa chỉ"], q)
-    st.caption(f"Đang hiển thị {len(d)} / {len(sp)} cửa hàng. Cửa hàng được tính hoàn thành khi đủ 4 hạng mục CPS "
-               f"(Demo, Tủ máy, Vách/Đảo, CellphoneS) và từ {PLUS_MIN} bài Plus trở lên đã hoàn thành (Field + QC). "
-               "Cửa hàng DTV hoàn thành khi hạng mục Trade Audit DTV hoàn thành.")
+    st.caption(f"Đang hiển thị {len(d)} / {len(sp)} cửa hàng. **Đã up đủ** = Field đã upload đủ 4 hạng mục CPS (Demo, Tủ máy, Vách/Đảo, CellphoneS) "
+               f"và từ {PLUS_MIN} bài Plus trở lên (cửa hàng DTV: hạng mục Trade Audit DTV). Plan bị QC trả về **vẫn tính là đã up**, "
+               "chỉ ghi nhận ở chỉ số sai sót; cửa hàng chưa up lần nào hiển thị 0.")
     if d.empty:
         st.info("Không có cửa hàng nào khớp bộ lọc.")
         return
@@ -3123,41 +3301,49 @@ def field_home(P, P_all, IV, label):
         return
     n_over = int(P["Quá hạn"].sum()) if "Quá hạn" in P.columns else 0
     if n_over:
-        st.error(f"⏰ Bạn có {n_over} plan bị từ chối quá {OVERDUE_DAYS} ngày chưa bổ sung. Hãy bổ sung ngay "
+        st.error(f"⏰ Bạn có {n_over} plan bị QC trả về quá {OVERDUE_DAYS} ngày chưa bổ sung. Hãy bổ sung ngay "
                  "(xem tab 'Việc cần xử lý'); các trường hợp quá hạn được ghi nhận để xử lý khấu trừ phí dịch vụ.")
     sp_all = store_progress_df(P_all)
     mine = set(P[P["Nghiệp vụ"].isin(["Trade", "Plus"]) & P["Hệ thống"].isin(["CPS", "DTV"])]["store"])
     sp = sp_all[sp_all["store"].isin(mine)].reset_index(drop=True)
     n = len(sp)
-    cnt = sp["stt"].value_counts().to_dict() if n else {}
-    n_done, n_rej, n_prog, n_ns = cnt.get("DONE", 0), cnt.get("REJECT", 0), cnt.get("PROGRESS", 0), cnt.get("NOT_STARTED", 0)
+    up_full, up_part, up_none = (int((sp["up_stt"] == k).sum()) if n else 0 for k in ("UP_FULL", "UP_PART", "UP_NONE"))
+    qc_done = int((sp["stt"] == "DONE").sum()) if n else 0
+    ret_st = int((sp["Bị trả về"] > 0).sum()) if n else 0
     if n:
-        p = pct(n_done, n)
-        if n_done == n:
-            msg = "🎉 Bạn đã hoàn thành tất cả cửa hàng được giao."
-        else:
-            msg = f"Bạn chưa hoàn thành: còn {n - n_done} cửa hàng ({n_rej} cần bổ sung · {n_prog} đang thực hiện · {n_ns} chưa thực hiện)."
+        p = pct(up_full, n)
+        msg = ("🎉 Bạn đã up đủ tất cả cửa hàng được giao." if up_full == n else
+               f"Còn {n - up_full} cửa hàng chưa up đủ: {up_part} đang up dở · {up_none} chưa up lần nào (0).")
+        msg += f" QC đã duyệt đủ {qc_done}/{n} cửa hàng" + (f" · {ret_st} cửa hàng đang có plan bị QC trả về." if ret_st else ".")
         st.markdown(
-            f'<div class="fbanner"><div class="ft">Tiến độ cửa hàng của bạn</div>'
-            f'<div class="fv">{n_done}<span> / {n} cửa hàng đã hoàn thành</span></div>'
+            f'<div class="fbanner"><div class="ft">Tiến độ upload của bạn</div>'
+            f'<div class="fv">{up_full}<span> / {n} cửa hàng Field đã up đủ</span></div>'
             f'<div class="kbar"><span style="width:{min(max(p, 0), 100)}%;background:{tone(p)}"></span></div>'
             f'<div class="fm">{html.escape(msg)}</div></div>', unsafe_allow_html=True)
         cards = [kpi_card("Cửa hàng được giao", n, "CPS + DTV"),
-                 kpi_card("Đã hoàn thành", n_done, "đủ điều kiện", pct(n_done, n)),
-                 kpi_card("Đang thực hiện", n_prog, "đã làm một phần / chờ QC"),
-                 kpi_card("Cần bổ sung", n_rej, "có plan bị từ chối" + (f" · {n_over} quá hạn" if n_over else ""), None, bad=True),
-                 kpi_card("Chưa thực hiện", n_ns, "chưa có plan nào xong")]
+                 kpi_card("Đã up đủ", up_full, "Field đã upload đủ yêu cầu", pct(up_full, n)),
+                 kpi_card("Đang up dở", up_part, "đã up một phần"),
+                 kpi_card("Chưa up (0)", up_none, "chưa up lần nào", None, bad=bool(up_none)),
+                 kpi_card("QC đã duyệt đủ", qc_done, "cửa hàng đạt", pct(qc_done, n)),
+                 kpi_card("Đang bị QC trả về", ret_st, "cửa hàng có plan cần sửa", None, bad=bool(ret_st))]
         st.markdown('<div class="kpi-row compact">' + "".join(cards) + "</div>", unsafe_allow_html=True)
     else:
         st.info("Bạn chưa có cửa hàng CPS/DTV nào được giao trong đợt này (có thể bạn chỉ phụ trách Mystery / CAMPUS).")
-    tot, done = len(P), int(P["Hoàn thành"].sum())
-    wait, rej, notf = int((P["_st"] == "WAIT_QC").sum()), int(P["Bị từ chối"].sum()), int((P["_st"] == "NOT_FIELD").sum())
+    tot, upl = len(P), int(P["Đã up"].sum())
+    qdone, ret_now = int(P["Hoàn thành"].sum()), int(P["Bị từ chối"].sum())
+    ever = int(P["Từng bị trả về"].sum()) if "Từng bị trả về" in P.columns else ret_now
+    err = pct(ever, upl)
+    section("Chất lượng upload của bạn", "Plan bị QC trả về không làm mất số plan đã up; chỉ tính vào tỷ lệ sai sót")
+    q = [kpi_card("Plan đã up", f"{upl}/{tot}", "Field đã upload (kể cả plan bị QC trả về)", pct(upl, tot)),
+         kpi_card("QC đã duyệt", qdone, "plan đạt", pct(qdone, upl)),
+         kpi_card("Đang bị QC trả về", ret_now, "cần sửa và up lại", None, bad=bool(ret_now)),
+         kpi_card("Tỷ lệ sai sót", "—" if pd.isna(err) else f"{err:.1f}%", f"{ever}/{upl} plan đã up từng bị QC trả về", None,
+                  bad=bool(not pd.isna(err) and err >= 10))]
+    st.markdown('<div class="kpi-row compact">' + "".join(q) + "</div>", unsafe_allow_html=True)
     others = P[~P["Nghiệp vụ"].isin(["Trade", "Plus"]) | ~P["Hệ thống"].isin(["CPS", "DTV"])]
-    extra = ""
     if len(others):
-        extra = f" · Mystery/CAMPUS: {int(others['Hoàn thành'].sum())}/{len(others)} plan hoàn thành"
-    st.caption(f"Tính theo plan: {tot} plan được giao · {done} hoàn thành · {wait} chờ QC · {rej} bị từ chối · {notf} chưa làm xong{extra}")
-    my_e2m = {n: USER["email"] for n in MY_NAMES}
+        st.caption(f"Mystery/CAMPUS: {int(others['Hoàn thành'].sum())}/{len(others)} plan hoàn thành")
+    my_e2m = {n_: USER["email"] for n_ in MY_NAMES}
     t0, t1, t2, t3 = st.tabs(["🏬 Cửa hàng của tôi", "🔔 Việc cần xử lý", "📋 Tất cả plan của tôi", "🎤 Kết quả Plus của tôi"])
     with t0:
         safe(field_stores_tab, sp)
@@ -3513,7 +3699,7 @@ def tab_qc(P):
                "'Tồn' = số ngày từ lúc Field thực hiện đến ngày số liệu.")
     n, d, r = len(f), int((f["t1"] == "Đã duyệt").sum()), int((f["t1"] == "Từ chối").sum())
     w, qw = int((f["t1"] == "Chưa chấm").sum()), int(f["Quản lý chờ"].sum())
-    cards = [kpi_card("Plan Field đã xong", n, "cần QC chấm"),
+    cards = [kpi_card("Plan Field đã up", n, "kể cả plan bị QC trả về"),
              kpi_card("QC viên đã xử lý", f"{d + r}/{n}", f"duyệt {d} · từ chối {r}", pct(d + r, n)),
              kpi_card("QC viên CHƯA CHẤM", w, "plan chờ QC viên", None, bad=True),
              kpi_card("QC Manager chưa duyệt", qw, "plan QC viên đã duyệt, chờ Manager", None, bad=True),
@@ -3526,7 +3712,7 @@ def tab_qc(P):
         done_ = int((g["t1"] == "Đã duyệt").sum())
         rej_ = int((g["t1"] == "Từ chối").sum())
         return pd.Series({
-            "Field xong": len(g), "QC viên – đã duyệt": done_, "QC viên – từ chối": rej_, "QC viên – CHƯA CHẤM": len(gw),
+            "Field đã up": len(g), "QC viên – đã duyệt": done_, "QC viên – từ chối": rej_, "QC viên – CHƯA CHẤM": len(gw),
             "% QC viên đã xử lý": pct(done_ + rej_, len(g)),
             "QC Manager – đã duyệt": int((g["QC"].eq("DONE") & g["QM"].eq("DONE")).sum()),
             "QC Manager – chưa duyệt": int(g["Quản lý chờ"].sum()),
@@ -3539,7 +3725,7 @@ def tab_qc(P):
         by[c_] = pd.to_numeric(by[c_])
     tot = summarize(f).to_frame("TỔNG CỘNG").T
     by_show = pd.concat([by, tot]).rename_axis("Nghiệp vụ").reset_index()
-    for c_ in ["Field xong", "QC viên – đã duyệt", "QC viên – từ chối", "QC viên – CHƯA CHẤM", "QC Manager – đã duyệt",
+    for c_ in ["Field đã up", "QC viên – đã duyệt", "QC viên – từ chối", "QC viên – CHƯA CHẤM", "QC Manager – đã duyệt",
                "QC Manager – chưa duyệt", "Tồn lâu nhất (ngày)"]:
         by_show[c_] = pd.to_numeric(by_show[c_]).astype(int)
     section("QC chưa chấm theo từng nghiệp vụ")
@@ -3822,7 +4008,7 @@ def analyze(P, label, scope=None):
     only_l2 = label == "Lần 2"
     cps_m = store_matrix(P, scope, "CPS", CPS_ITEMS, only_l2)
     dtv_m = store_matrix(P, scope, "DTV", DTV_ITEMS) if not only_l2 else store_matrix(P.iloc[0:0], scope.iloc[0:0], "DTV", DTV_ITEMS)
-    my_m = mystery_matrix(P, scope)
+    my_m = mystery_matrix(P, scope) if not only_l2 else mystery_matrix(P.iloc[0:0], scope.iloc[0:0])
     return cps_m, dtv_m, my_m, lead_summary(P, scope, cps_m, dtv_m, my_m)
 
 
@@ -3836,7 +4022,9 @@ def render_round(file_bytes, fname, label):
     if IS_ADMIN and not FLAGS_OK:
         st.warning("File store_master.csv trên GitHub là bản cũ (thiếu cột Mystery / L2). "
                    "Hãy upload lại store_master.csv bản mới để số liệu Mystery và Lần 2 đúng.")
-    P = add_overdue(P)
+    if label == "Lần 2":  # Lần 2 chỉ có Trade Audit (CPS) và Audit Plus: không Mystery, CAMPUS, DTV
+        P = P[P["Nghiệp vụ"].isin(["Trade", "Plus"]) & (P["Hệ thống"] == "CPS")].reset_index(drop=True)
+    P = mark_returned(add_overdue(P))
     unres = unresolved_stores(P, OVR) if IS_ADMIN else pd.DataFrame()
     IVc = check_audience(bundle["IV"], staff, ALLOWED_KW)
     scope = stores
@@ -3861,45 +4049,29 @@ def render_round(file_bytes, fname, label):
     bell(wrong, low, over, unres, resets, f"{fname}|{label}|{ROLE}|{MY_LEAD}")
     cps_m, dtv_m, my_m, ls = analyze(P, label, scope)
     camp = campus_matrix(P)
-    names = ["📊 Tổng quan", "🏬 CPS – 4 hạng mục", "🏪 DTV", "➕ Plus 1–5", "🕵️ Mystery", "🎓 CAMPUS",
-             "🎤 Trả bài Plus", "⚠️ Bị từ chối", "👥 Nhân sự Field", "📨 Yêu cầu bổ sung"]
-    if IS_ADMIN:
-        names += ["🧭 Phân luồng Lead", "📈 Hiệu suất QC", "🧪 Kiểm tra dữ liệu", "🔐 Tài khoản"]
-    tabs = st.tabs(names)
+    l2 = label == "Lần 2"
     trade = P[P["Nghiệp vụ"] == "Trade"]
-    with tabs[0]:
-        safe(tab_overview, P, cps_m, dtv_m, my_m, ls, label, len(wrong), len(low), len(over), len(unres), len(resets))
-    with tabs[1]:
-        safe(tab_trade, cps_m, CPS_ITEMS, "CPS", "cps", int((trade["Hệ thống"] == "CPS").sum()), label)
-    with tabs[2]:
-        if label == "Lần 2":
-            st.info("Đợt Lần 2 không áp dụng DTV.")
-        else:
-            safe(tab_trade, dtv_m, DTV_ITEMS, "DTV", "dtv", int((trade["Hệ thống"] == "DTV").sum()), label)
-    with tabs[3]:
-        safe(tab_plus, P)
-    with tabs[4]:
-        safe(tab_mystery, my_m, P, bundle["sheets"])
-    with tabs[5]:
-        safe(tab_campus, camp, P)
-    with tabs[6]:
-        safe(tab_interviews, bundle["IV"])
-    with tabs[7]:
-        _when = st.session_state.get(f"{'l2' if label == 'Lần 2' else 'l1'}_saved")
-        safe(tab_reject, P, file_bytes, f"{fname}" + (f", lưu lúc {_when}" if _when else ""))
-    with tabs[8]:
-        safe(tab_field_staff, P)
-    with tabs[9]:
-        safe(tab_requests, P)
+    _when = st.session_state.get(f"{'l2' if l2 else 'l1'}_saved")
+    plan = [("📊 Tổng quan", lambda: safe(tab_overview, P, cps_m, dtv_m, my_m, ls, label, len(wrong), len(low), len(over), len(unres), len(resets))),
+            ("🏬 CPS – 4 hạng mục", lambda: safe(tab_trade, cps_m, CPS_ITEMS, "CPS", "cps", int((trade["Hệ thống"] == "CPS").sum()), label))]
+    if not l2:  # DTV, Mystery, CAMPUS chỉ có ở Lần 1
+        plan.append(("🏪 DTV", lambda: safe(tab_trade, dtv_m, DTV_ITEMS, "DTV", "dtv", int((trade["Hệ thống"] == "DTV").sum()), label)))
+    plan.append(("➕ Plus 1–5", lambda: safe(tab_plus, P)))
+    if not l2:
+        plan.append(("🕵️ Mystery", lambda: safe(tab_mystery, my_m, P, bundle["sheets"])))
+        plan.append(("🎓 CAMPUS", lambda: safe(tab_campus, camp, P)))
+    plan += [("🎤 Trả bài Plus", lambda: safe(tab_interviews, bundle["IV"])),
+             ("⚠️ Bị từ chối", lambda: safe(tab_reject, P, file_bytes, f"{fname}" + (f", lưu lúc {_when}" if _when else ""))),
+             ("👥 Nhân sự Field", lambda: safe(tab_field_staff, P)),
+             ("📨 Yêu cầu bổ sung", lambda: safe(tab_requests, P))]
     if IS_ADMIN:
-        with tabs[10]:
-            safe(tab_routing, P, unres)
-        with tabs[11]:
-            safe(tab_qc, P)
-        with tabs[12]:
-            safe(tab_validation, P, bundle, label)
-        with tabs[13]:
-            safe(tab_accounts, P)
+        plan += [("🧭 Phân luồng Lead", lambda: safe(tab_routing, P, unres)),
+                 ("📈 Hiệu suất QC", lambda: safe(tab_qc, P)),
+                 ("🧪 Kiểm tra dữ liệu", lambda: safe(tab_validation, P, bundle, label)),
+                 ("🔐 Tài khoản", lambda: safe(tab_accounts, P))]
+    for tb, (_, fn) in zip(st.tabs([p[0] for p in plan]), plan):
+        with tb:
+            fn()
 
 
 def ceo_view():
