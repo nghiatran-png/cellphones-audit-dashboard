@@ -18,6 +18,7 @@ import unicodedata
 from pathlib import Path
 
 import numpy as np
+import openpyxl
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -25,7 +26,7 @@ import streamlit as st
 st.set_page_config(page_title="CellphoneS Audit Platform", page_icon="📱",
                    layout="wide", initial_sidebar_state="auto")
 
-APP_VERSION = "6.5.0"
+APP_VERSION = "6.9.0"
 CPS_ITEMS = ["Demo", "Tủ máy", "Vách/Đảo", "CellphoneS"]
 DTV_ITEMS = ["Trade Audit DTV"]
 PLUS_ITEMS = [f"Plus {i}" for i in range(1, 6)]
@@ -4001,6 +4002,742 @@ def reset_admin_section(users):
 
 
 # =====================================================================
+# Lương Field Lead (chỉ Admin) – theo cơ chế bảng lương CellphoneS (Field Lead)
+# =====================================================================
+SAL_FILE = DATA_DIR / "salary_config.json"
+SAL_REPO = find_file("salary_config.json")
+ROSTER_LIVE = DATA_DIR / "salary_roster.csv"
+ROSTER_REPO = find_file("salary_roster.csv")
+ROSTER_COLS = ["Họ tên", "Field Lead", "Số tiền chuyển khoản", "Ghi chú"]
+LEAD_ALIAS = {"Anh Tiến": "Đỗ Quang Tiến", "Anh Nam": "Vũ Hoài Nam", "Anh Nghĩa": "Trần Trung Nghĩa", "Anh Cảnh": "Ngô Tuấn Cảnh"}
+LEAD_SHORT = {v: k for k, v in LEAD_ALIAS.items()}
+SAL_DEFAULT = {
+    "period": "", "basis": "qc",  # qc = chỉ tính khi QC đã duyệt; up = tính cả plan Field đã up (kể cả chờ QC)
+    "trade_hi": 200000, "trade_lo": 250000,        # cost visit Trade Audit: Hà Nội/HCM/Bình Dương và tỉnh khác
+    "plus_cps": 50000, "plus_dtv": 75000, "myst": 250000,   # cost visit Trade Audit Plus (CPS/DTV) và Khách hàng bí mật
+    "sup_trade": 50000, "sup_plus_cps": 15000, "sup_plus_dtv": 20000, "sup_myst": 50000,  # cost hỗ trợ Lead
+    "photo": 30000, "reject": 20000,               # trừ Admin hỗ trợ up hình / trừ plan từ chối-bổ sung (mỗi mục)
+    "hi_provinces": ["Hà Nội", "Hồ Chí Minh", "Bình Dương"],
+    "no_support_leads": ["Trần Trung Nghĩa"],      # Lead không nhận cost hỗ trợ Lead (như bảng lương tháng 4)
+    "campus_on": True,  # kỳ có CAMPUS: chỉ tháng nào có cơ sở CAMPUS mới tính (từ 12/2026 mặc định tắt)
+    "campus": 800000, "sup_campus": 0, "qc_campus": 45000,  # CAMPUS: 800.000 đ / cơ sở hoàn thành; QC Campus 45.000 đ / cơ sở
+    "count": {"Trade": {"L1": True, "L2": True}, "Plus": {"L1": True, "L2": True}, "Mystery": {"L1": True, "L2": False},
+              "DTV": {"L1": True, "L2": False}, "Campus": {"L1": True, "L2": False}},
+    "photo_counts": {}, "reject_override": {},
+}
+
+
+def sal_load():
+    p = SAL_FILE if SAL_FILE.exists() else SAL_REPO
+    try:
+        if p is not None and Path(p).exists():
+            return sal_merge(json.loads(Path(p).read_text("utf-8")))
+    except Exception:  # noqa: BLE001
+        pass
+    return sal_merge({})
+
+
+def sal_save(cfg):
+    with _log_lock():
+        DATA_DIR.mkdir(exist_ok=True)
+        tmp = SAL_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=1), "utf-8")
+        tmp.replace(SAL_FILE)
+
+
+def prov_of_code(code, hi=None):
+    """Nhóm tỉnh tính cost visit suy ra từ mã cửa hàng (HNO / HCM / BDU), còn lại là Others."""
+    seg = str(code).split("-")[1] if "-" in str(code) else ""
+    return {"HNO": "Hà Nội", "HCM": "Hồ Chí Minh", "BDU": "Bình Dương"}.get(seg, "Others")
+
+
+def salary_store_units(rounds, cfg):
+    """Số lượt tính lương theo từng cửa hàng và đợt. Trade Audit: đủ hạng mục của cửa hàng trong đợt; Plus: đủ số bài Plus tối thiểu;
+    Mystery: có plan Mystery hoàn thành. basis='qc' chỉ tính khi QC đã duyệt; 'up' tính cả plan Field đã up."""
+    basis, recs = cfg.get("basis", "qc"), {}
+    for label, short in (("Lần 1", "L1"), ("Lần 2", "L2")):
+        P = rounds.get(label)
+        if P is None or P.empty:
+            continue
+        sp = store_progress_df(P)
+        for _, r in sp.iterrows():
+            e = recs.setdefault(r["store"], {"store": r["store"], "Lead": r["Lead"], "Hệ thống": r["Hệ thống"]})
+            comp = list(r["comp"].values())
+            tr = all(v["st"] == "DONE" for v in comp) if basis == "qc" else all(v["up"] for v in comp)
+            pl = int((r["Plus hoàn thành"] if basis == "qc" else r["Plus đã up"]) >= r["Plus cần"]) if r["Plus cần"] else 0
+            e[f"Trade_{short}"], e[f"Plus_{short}"] = int(tr), pl
+        cp = P[P["Hệ thống"] == "CAMPUS"] if cfg.get("campus_on", True) else P.iloc[0:0]
+        if len(cp):  # CAMPUS: 1 cơ sở hoàn thành khi mọi plan của cơ sở đã hoàn thành (QC duyệt) / đã up
+            colc = "Hoàn thành" if basis == "qc" else "Đã up"
+            for code, g in cp.groupby("store"):
+                e = recs.setdefault(code, {"store": code, "Lead": g["Lead"].iloc[0], "Hệ thống": "CAMPUS"})
+                e[f"Camp_{short}"] = int(bool(g[colc].all()))
+        my = P[(P["Nghiệp vụ"] == "Mystery") & (P["Hệ thống"] != "CAMPUS")]
+        if len(my):
+            col = "Hoàn thành" if basis == "qc" else "Đã up"
+            for code, g in my.groupby("store"):
+                e = recs.setdefault(code, {"store": code, "Lead": g["Lead"].iloc[0], "Hệ thống": "CPS"})
+                e[f"Myst_{short}"] = int(bool(g[col].any()))
+    cols = ["Trade_L1", "Trade_L2", "Plus_L1", "Plus_L2", "Myst_L1", "Myst_L2", "Camp_L1", "Camp_L2"]
+    df = pd.DataFrame(list(recs.values()), columns=["store", "Lead", "Hệ thống"] + cols)
+    df[cols] = df[cols].fillna(0).astype(int)
+    df["Province"] = df["store"].map(prov_of_code)
+    cnt = cfg["count"]
+    tr_cps = sum(df[f"Trade_{s}"] * int(bool(cnt["Trade"][s])) for s in ("L1", "L2"))
+    tr_dtv = sum(df[f"Trade_{s}"] * int(bool(cnt.get("DTV", {"L1": True, "L2": False})[s])) for s in ("L1", "L2"))
+    df["Trade"] = np.where(df["Hệ thống"] == "DTV", tr_dtv, tr_cps)
+    df["Plus"] = sum(df[f"Plus_{s}"] * int(bool(cnt["Plus"][s])) for s in ("L1", "L2"))
+    df["Mystery"] = sum(df[f"Myst_{s}"] * int(bool(cnt["Mystery"][s])) for s in ("L1", "L2"))
+    df["Campus"] = sum(df[f"Camp_{s}"] * int(bool(cnt.get("Campus", {"L1": True, "L2": False})[s])) for s in ("L1", "L2"))
+    return df.sort_values(["Lead", "Hệ thống", "store"]).reset_index(drop=True)
+
+
+def salary_rows(units, cfg):
+    """Dòng lương theo Lead × Hệ thống × Tỉnh (giống sheet 'Bang luong'): số lượng × đơn giá + hỗ trợ Lead."""
+    if units.empty:
+        return pd.DataFrame()
+    units = units.copy()
+    if "Campus" not in units.columns:
+        units["Campus"] = 0
+    units = units[units[["Trade", "Plus", "Mystery", "Campus"]].sum(axis=1) > 0]  # chỉ cửa hàng có lượt tính lương
+    g = units.groupby(["Lead", "Hệ thống", "Province"]).agg(**{"Số cửa hàng": ("store", "nunique"), "Trade Audit": ("Trade", "sum"),
+                                                              "Trade Audit Plus": ("Plus", "sum"), "Khách hàng bí mật": ("Mystery", "sum"),
+                                                              "Campus": ("Campus", "sum")}).reset_index()
+    g = g[(g[["Trade Audit", "Trade Audit Plus", "Khách hàng bí mật", "Campus"]].sum(axis=1) > 0)].copy()
+    if g.empty:
+        return g
+    hi = g["Province"].isin(cfg["hi_provinces"])
+    cps = g["Hệ thống"] == "CPS"
+    g["Cost visit Trade"] = np.where(hi, cfg["trade_hi"], cfg["trade_lo"])
+    g["Cost visit Plus"] = np.where(cps, cfg["plus_cps"], cfg["plus_dtv"])
+    g["Cost visit Mystery"] = cfg["myst"]
+    g["Cost Campus"] = cfg["campus"]
+    sup = ~g["Lead"].isin(cfg["no_support_leads"])
+    g["Lương thực hiện"] = (g["Trade Audit"] * g["Cost visit Trade"] + g["Trade Audit Plus"] * g["Cost visit Plus"]
+                            + g["Khách hàng bí mật"] * g["Cost visit Mystery"] + g["Campus"] * g["Cost Campus"])
+    g["Hỗ trợ Lead"] = np.where(sup, g["Trade Audit"] * cfg["sup_trade"]
+                                + g["Trade Audit Plus"] * np.where(cps, cfg["sup_plus_cps"], cfg["sup_plus_dtv"])
+                                + g["Khách hàng bí mật"] * cfg["sup_myst"] + g["Campus"] * cfg["sup_campus"], 0)
+    return g.reset_index(drop=True)
+
+
+def salary_rejects(rounds):
+    """Số plan từng bị QC trả về trong kỳ theo Lead (mỗi plan tính một lần), cộng cả hai đợt."""
+    tot = {}
+    for P in rounds.values():
+        if P is None or P.empty or "Từng bị trả về" not in P.columns:
+            continue
+        for ld, n in P[P["Từng bị trả về"] & (P["Hệ thống"] != "CAMPUS")].groupby("Lead").size().items():  # CAMPUS không thuộc cơ chế lương
+            tot[ld] = tot.get(ld, 0) + int(n)
+    return tot
+
+
+def salary_by_lead(rows, rejects, cfg):
+    if rows.empty:
+        return pd.DataFrame()
+    g = rows.groupby("Lead").agg(**{"Số cửa hàng được tính": ("Số cửa hàng", "sum"), "Trade Audit": ("Trade Audit", "sum"),
+                                   "Trade Audit Plus": ("Trade Audit Plus", "sum"), "Khách hàng bí mật": ("Khách hàng bí mật", "sum"),
+                                   "Campus": ("Campus", "sum"), "Lương thực hiện": ("Lương thực hiện", "sum"), "Hỗ trợ Lead": ("Hỗ trợ Lead", "sum")}).reset_index()
+    ro = cfg.get("reject_override", {})
+    g["Plan từ chối/bổ sung"] = g["Lead"].map(lambda l: int(ro[l]) if l in ro and str(ro[l]).strip() != "" else int(rejects.get(l, 0)))
+    g["Số mục admin hỗ trợ up hình"] = g["Lead"].map(lambda l: int(cfg.get("photo_counts", {}).get(l, 0) or 0))
+    g["Trừ admin hỗ trợ up hình"] = g["Số mục admin hỗ trợ up hình"] * cfg["photo"]
+    g["Trừ từ chối/bổ sung"] = g["Plan từ chối/bổ sung"] * cfg["reject"]
+    g["TỔNG LƯƠNG"] = g["Lương thực hiện"] + g["Hỗ trợ Lead"] - g["Trừ admin hỗ trợ up hình"] - g["Trừ từ chối/bổ sung"]
+    g.insert(1, "Tên trong bảng lương", g["Lead"].map(lambda x: LEAD_SHORT.get(x, x)))
+    return g
+
+
+def roster_load():
+    p = ROSTER_LIVE if ROSTER_LIVE.exists() else ROSTER_REPO
+    try:
+        if p is not None and Path(p).exists():
+            d = pd.read_csv(p, dtype=str).fillna("")
+            for c in ROSTER_COLS:
+                if c not in d.columns:
+                    d[c] = ""
+            d["Số tiền chuyển khoản"] = pd.to_numeric(d["Số tiền chuyển khoản"], errors="coerce").fillna(0).astype(int)
+            return d[ROSTER_COLS]
+    except Exception:  # noqa: BLE001
+        pass
+    return pd.DataFrame(columns=ROSTER_COLS).astype({"Số tiền chuyển khoản": int})
+
+
+def roster_save(df):
+    with _log_lock():
+        DATA_DIR.mkdir(exist_ok=True)
+        tmp = ROSTER_LIVE.with_suffix(".tmp")
+        df[ROSTER_COLS].to_csv(tmp, index=False, encoding="utf-8")
+        tmp.replace(ROSTER_LIVE)
+
+
+def _clean_roster(df):
+    d = df.copy()
+    d["Họ tên"] = d["Họ tên"].fillna("").astype(str).str.strip()
+    d = d[d["Họ tên"] != ""]
+    d["Field Lead"] = d["Field Lead"].fillna("").astype(str)
+    d["Ghi chú"] = d["Ghi chú"].fillna("").astype(str)
+    d["Số tiền chuyển khoản"] = pd.to_numeric(d["Số tiền chuyển khoản"], errors="coerce").fillna(0).astype(int)
+    return d[ROSTER_COLS].reset_index(drop=True)
+
+
+def roster_from_xlsx(xlsx_bytes):
+    """Đọc danh sách nhân sự nhận lương và Lead từ sheet 'Chuyen khoan' của file bảng lương (không lấy CCCD/tài khoản ngân hàng)."""
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), read_only=True, data_only=True)
+    ws = wb["Chuyen khoan"]
+    rows = []
+    for r in ws.iter_rows(min_row=13, max_col=15, values_only=True):
+        name, lead = r[3], r[14]
+        if r[1] and str(r[1]).upper().startswith("TỔNG"):
+            break
+        if name and lead:
+            rows.append({"Họ tên": str(name).strip(), "Field Lead": LEAD_ALIAS.get(str(lead).strip(), str(lead).strip()),
+                         "Số tiền chuyển khoản": 0, "Ghi chú": ""})
+    return pd.DataFrame(rows, columns=ROSTER_COLS)
+
+
+def vnd(x):
+    try:
+        return f"{int(round(float(x))):,}".replace(",", ".")
+    except (TypeError, ValueError):
+        return ""
+
+
+def salary_rounds():
+    """Dữ liệu hai đợt (nếu đã nạp) để tính lương: Lần 1 đầy đủ, Lần 2 chỉ Trade Audit CPS và Audit Plus."""
+    out = {}
+    for label, pre in (("Lần 1", "l1"), ("Lần 2", "l2")):
+        b = st.session_state.get(f"{pre}_bytes")
+        if b is None:
+            continue
+        P = compute_all(b, label, stores, DEFAULT_MAX, CAMPUS_KW, APP_VERSION)["P"]
+        if P.empty:
+            continue
+        if label == "Lần 2":
+            P = P[P["Nghiệp vụ"].isin(["Trade", "Plus"]) & (P["Hệ thống"] == "CPS")]
+        out[label] = mark_returned(add_overdue(P.reset_index(drop=True)))
+    return out
+
+
+PER_FILE = DATA_DIR / "salary_periods.json"
+PER_REPO = find_file("salary_periods.json")
+
+
+def per_load():
+    p = PER_FILE if PER_FILE.exists() else PER_REPO
+    try:
+        return json.loads(Path(p).read_text("utf-8")) if p is not None and Path(p).exists() else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def per_save(d):
+    with _log_lock():
+        DATA_DIR.mkdir(exist_ok=True)
+        tmp = PER_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d, ensure_ascii=False), "utf-8")
+        tmp.replace(PER_FILE)
+
+
+def per_label(k):
+    try:
+        y, m = k.split("-")
+        return f"Tháng {m}/{y}"
+    except ValueError:
+        return k
+
+
+def sal_merge(d):
+    cfg = json.loads(json.dumps(SAL_DEFAULT))
+    d = dict(d or {})
+    if d and "campus" not in d:  # cấu hình phiên bản cũ (trước khi có CAMPUS/DTV): dùng quy tắc tính lượt mới
+        d.pop("count", None)
+    for k, v in d.items():
+        if isinstance(v, dict) and isinstance(cfg.get(k), dict):
+            cfg[k].update(v)
+        else:
+            cfg[k] = v
+    for k in ("Trade", "Plus", "Mystery", "DTV", "Campus"):
+        cfg["count"].setdefault(k, SAL_DEFAULT["count"][k])
+    return cfg
+
+
+def campus_default(key):
+    """CAMPUS chỉ có ở một số tháng: từ kỳ 2026-12 trở đi mặc định không tính (admin vẫn bật lại được nếu tháng đó có)."""
+    return str(key) < "2026-12"
+
+
+def per_new(D, key, from_key=None):
+    """Tạo kỳ lương tháng mới: sao chép nhân sự, phân công cửa hàng và đơn giá từ kỳ trước (số tiền chuyển khoản đặt lại 0)."""
+    if from_key and from_key in D:
+        src = D[from_key]
+        cfg_new = sal_merge(src.get("config"))
+        cfg_new["campus_on"] = campus_default(key)
+        D[key] = {"config": cfg_new, "roster": [{**r, "Số tiền chuyển khoản": 0} for r in src.get("roster", [])],
+                  "store_lead": dict(src.get("store_lead", {})), "staff_store": dict(src.get("staff_store", {})),
+                  "locked": False, "created": _now_iso(), "from": from_key}
+    else:
+        cfg_new = sal_load()
+        cfg_new["campus_on"] = campus_default(key)
+        D[key] = {"config": cfg_new, "roster": roster_load().to_dict("records"), "store_lead": {}, "staff_store": {},
+                  "locked": False, "created": _now_iso(), "from": ""}
+    return D[key]
+
+
+def salary_store_pay(units, cfg):
+    """Lương theo từng cửa hàng (cộng lại bằng đúng lương thực hiện + hỗ trợ Lead của Lead)."""
+    u = units.copy()
+    if "Campus" not in u.columns:
+        u["Campus"] = 0
+    hi, cps = u["Province"].isin(cfg["hi_provinces"]), u["Hệ thống"] == "CPS"
+    t_cost, p_cost = np.where(hi, cfg["trade_hi"], cfg["trade_lo"]), np.where(cps, cfg["plus_cps"], cfg["plus_dtv"])
+    u["Lương thực hiện"] = u["Trade"] * t_cost + u["Plus"] * p_cost + u["Mystery"] * cfg["myst"] + u["Campus"] * cfg["campus"]
+    sup = ~u["Lead"].isin(cfg["no_support_leads"])
+    u["Hỗ trợ Lead"] = np.where(sup, u["Trade"] * cfg["sup_trade"] + u["Plus"] * np.where(cps, cfg["sup_plus_cps"], cfg["sup_plus_dtv"])
+                                + u["Mystery"] * cfg["sup_myst"] + u["Campus"] * cfg["sup_campus"], 0)
+    u["Lương cửa hàng"] = u["Lương thực hiện"] + u["Hỗ trợ Lead"]
+    u["Lượt"] = u["Trade"] + u["Plus"] + u["Mystery"] + u["Campus"]
+    return u
+
+
+def split_by_stores(roster, bylead, upay):
+    """Chia tổng lương của từng Lead cho nhân sự trong team theo lương của các cửa hàng họ phụ trách (không có phân công thì chia đều)."""
+    r = roster.copy().reset_index(drop=True)
+    for _, rr in bylead.iterrows():
+        idx = r.index[r["Field Lead"] == rr["Lead"]]
+        if not len(idx):
+            continue
+        total = int(rr["TỔNG LƯƠNG"])
+        w = np.array([float(upay.loc[upay["Nhân sự phụ trách"] == r.loc[i, "Họ tên"], "Lương cửa hàng"].sum()) for i in idx])
+        if w.sum() <= 0:
+            w = np.ones(len(idx))
+        amt = (total * w / w.sum() // 1000 * 1000).astype(int)
+        amt[int(np.argmax(w))] += total - int(amt.sum())
+        r.loc[idx, "Số tiền chuyển khoản"] = amt
+    return r
+
+
+def parse_assign_file(name, data):
+    """Đọc file cập nhật hằng tháng: cột Mã cửa hàng (bắt buộc), Lead và/hoặc Nhân sự phụ trách (tùy chọn)."""
+    df = pd.read_csv(io.BytesIO(data), dtype=str) if str(name).lower().endswith(".csv") else pd.read_excel(io.BytesIO(data), dtype=str)
+    cols = {norm(c): c for c in df.columns}
+    c_store = next((v for k, v in cols.items() if "ma cua hang" in k or k in ("store", "ma ch")), None)
+    c_lead = next((v for k, v in cols.items() if k.startswith("lead") or "field lead" in k), None)
+    c_staff = next((v for k, v in cols.items() if "nhan su" in k or "nhan vien" in k or k == "staff"), None)
+    if not c_store:
+        raise ValueError("Thiếu cột 'Mã cửa hàng'")
+    out = pd.DataFrame({"store": df[c_store].fillna("").map(norm_code),
+                        "lead": df[c_lead].fillna("").map(lambda x: LEAD_ALIAS.get(str(x).strip(), str(x).strip())) if c_lead else "",
+                        "staff": df[c_staff].fillna("").astype(str).str.strip() if c_staff else ""})
+    return out[out["store"] != ""]
+
+
+def salary_qc_campus(rounds, cfg):
+    """Chi phí QC Campus (không cộng vào lương Lead): 45.000 đ cho mỗi cơ sở CAMPUS đã QC xong; chia cho các QC viên
+    theo số plan mỗi người đã duyệt ở cơ sở đó."""
+    rate, rec = float(cfg.get("qc_campus", 45000)), {}
+    if not cfg.get("campus_on", True):
+        return pd.DataFrame(columns=["QC viên", "Số cơ sở (quy đổi)", "Số plan đã QC", "Chi phí QC Campus"])
+    for label, short in (("Lần 1", "L1"), ("Lần 2", "L2")):
+        P = rounds.get(label)
+        if P is None or P.empty or not bool(cfg["count"].get("Campus", {"L1": True, "L2": False})[short]):
+            continue
+        for code, g in P[P["Hệ thống"] == "CAMPUS"].groupby("store"):
+            if not bool(g["Hoàn thành"].all()):
+                continue
+            w = g[g["auditor"].fillna("") != ""].groupby("auditor").size()
+            if w.empty:
+                w = pd.Series({"(chưa rõ QC viên)": len(g)})
+            for aud, n in w.items():
+                e = rec.setdefault(aud, {"cs": 0.0, "plan": 0, "amt": 0.0})
+                e["cs"] += n / w.sum()
+                e["plan"] += int(n)
+                e["amt"] += rate * n / w.sum()
+    df = pd.DataFrame([{"QC viên": k, "Số cơ sở (quy đổi)": round(v["cs"], 2), "Số plan đã QC": v["plan"], "Chi phí QC Campus": int(round(v["amt"]))}
+                       for k, v in rec.items()], columns=["QC viên", "Số cơ sở (quy đổi)", "Số plan đã QC", "Chi phí QC Campus"])
+    return df.sort_values("Chi phí QC Campus", ascending=False).reset_index(drop=True)
+
+
+def salary_excel(period, rows, bylead, units, roster, cfg, qc=None):
+    r = rows.copy()
+    r.insert(0, "Stt", range(1, len(r) + 1))
+    r["Field Lead"] = r["Lead"].map(lambda x: LEAD_SHORT.get(x, x))
+    ded = bylead.set_index("Lead")
+    first = ~r["Lead"].duplicated()
+    nosup = r["Lead"].isin(cfg["no_support_leads"])
+    r["Cost hỗ trợ Lead – Trade"] = np.where(nosup, 0, cfg["sup_trade"])
+    r["Cost hỗ trợ Lead – Plus"] = np.where(nosup, 0, np.where(r["Hệ thống"] == "CPS", cfg["sup_plus_cps"], cfg["sup_plus_dtv"]))
+    r["Cost hỗ trợ Lead – Mystery"] = np.where(nosup, 0, cfg["sup_myst"])
+    r["Trừ admin hỗ trợ up hình"] = np.where(first, r["Lead"].map(ded["Trừ admin hỗ trợ up hình"]), 0)
+    r["Trừ từ chối/bổ sung"] = np.where(first, r["Lead"].map(ded["Trừ từ chối/bổ sung"]), 0)
+    r["Total lương"] = r["Lương thực hiện"] + r["Hỗ trợ Lead"] - r["Trừ admin hỗ trợ up hình"] - r["Trừ từ chối/bổ sung"]
+    if "Campus" not in r.columns:
+        r["Campus"], r["Cost Campus"] = 0, cfg.get("campus", 0)
+    r["Total (số lượng)"] = r["Trade Audit"] + r["Trade Audit Plus"] + r["Khách hàng bí mật"] + r["Campus"]
+    bang = r[["Stt", "Field Lead", "Hệ thống", "Province", "Trade Audit", "Trade Audit Plus", "Khách hàng bí mật", "Campus", "Total (số lượng)",
+              "Cost visit Trade", "Cost visit Plus", "Cost visit Mystery", "Cost Campus", "Cost hỗ trợ Lead – Trade", "Cost hỗ trợ Lead – Plus",
+              "Cost hỗ trợ Lead – Mystery", "Lương thực hiện", "Hỗ trợ Lead", "Trừ admin hỗ trợ up hình", "Trừ từ chối/bổ sung", "Total lương"]]
+    tg = bylead.copy()
+    mem = (roster.groupby("Field Lead").agg(**{"Số nhân sự nhận lương": ("Họ tên", "count"), "Đã phân bổ chuyển khoản": ("Số tiền chuyển khoản", "sum")})
+           if not roster.empty else pd.DataFrame(columns=["Số nhân sự nhận lương", "Đã phân bổ chuyển khoản"]))
+    tg = tg.merge(mem, left_on="Lead", right_index=True, how="left").fillna({"Số nhân sự nhận lương": 0, "Đã phân bổ chuyển khoản": 0})
+    tg["Chênh lệch (Tổng lương − phân bổ)"] = tg["TỔNG LƯƠNG"] - tg["Đã phân bổ chuyển khoản"]
+    ck = roster.copy()
+    ck.insert(0, "STT", range(1, len(ck) + 1))
+    ck["Field Lead"] = ck["Field Lead"].map(lambda x: LEAD_SHORT.get(x, x))
+    cols = [c for c in ["store", "Lead", "Hệ thống", "Province", "Nhân sự phụ trách", "Trade_L1", "Trade_L2", "Plus_L1", "Plus_L2", "Myst_L1", "Myst_L2", "Camp_L1", "Camp_L2",
+                        "Trade", "Plus", "Mystery", "Campus", "Lương thực hiện", "Hỗ trợ Lead", "Lương cửa hàng"] if c in units.columns]
+    ct = units[cols].rename(columns={"store": "Mã cửa hàng", "Province": "Tỉnh (nhóm)", "Trade": "Lượt Trade tính lương",
+                                     "Plus": "Lượt Plus tính lương", "Mystery": "Lượt Mystery tính lương", "Campus": "Lượt Campus tính lương"})
+    info = pd.DataFrame({"Thông số": ["Kỳ lương", "Tính theo", "Cost visit Trade (HN/HCM/BD)", "Cost visit Trade (tỉnh khác)", "Cost visit Plus CPS", "Cost visit Plus DTV",
+                                       "Cost visit Mystery", "CAMPUS (mỗi cơ sở)", "QC Campus (mỗi cơ sở, chi phí QC riêng)", "Hỗ trợ Lead – Trade", "Hỗ trợ Lead – Plus CPS",
+                                       "Hỗ trợ Lead – Plus DTV", "Hỗ trợ Lead – Mystery", "Hỗ trợ Lead – CAMPUS", "Trừ admin hỗ trợ up hình (mỗi mục)", "Trừ từ chối/bổ sung (mỗi plan)", "Lead không nhận hỗ trợ"],
+                         "Giá trị": [period, "QC đã duyệt" if cfg["basis"] == "qc" else "Field đã up (gồm chờ QC)", cfg["trade_hi"], cfg["trade_lo"], cfg["plus_cps"],
+                                     cfg["plus_dtv"], cfg["myst"], cfg["campus"], cfg["qc_campus"], cfg["sup_trade"], cfg["sup_plus_cps"], cfg["sup_plus_dtv"],
+                                     cfg["sup_myst"], cfg["sup_campus"], cfg["photo"],
+                                     cfg["reject"], ", ".join(cfg["no_support_leads"]) or "—"]})
+    if not cfg.get("campus_on", True):  # kỳ không có CAMPUS: bỏ mọi cột và dòng liên quan
+        bang = bang.drop(columns=[c for c in ("Campus", "Cost Campus") if c in bang.columns])
+        ct = ct.drop(columns=[c for c in ct.columns if "Campus" in c or "Camp_" in c])
+        info = info[~info["Thông số"].str.contains("CAMPUS|Campus", regex=True)]
+        qc = None
+    sheets = {"Bang luong": bang, "Tong hop Lead": tg.drop(columns=[c for c in ("Campus",) if c in tg.columns and not cfg.get("campus_on", True)]),
+              "Chi tiet cua hang": ct, "Chuyen khoan": ck}
+    if qc is not None and len(qc):
+        sheets["QC Campus"] = qc
+    sheets["Co che"] = info
+    return to_excel_multi(sheets)
+
+
+def tab_salary():
+    if not IS_ADMIN:
+        st.error("Chức năng lương chỉ dành cho Quản trị.")
+        return
+    D = per_load()
+    now_key = pd.Timestamp.now(tz="Asia/Ho_Chi_Minh").strftime("%Y-%m")
+    try:  # kỳ mặc định = tháng của dữ liệu raw (ngày update mới nhất), không phải tháng của lịch
+        dts = [P["Ngày dữ liệu"].max() for P in salary_rounds().values() if "Ngày dữ liệu" in P.columns]
+        dts = [d for d in dts if pd.notna(d)]
+        if dts:
+            now_key = max(dts).strftime("%Y-%m")
+    except Exception:  # noqa: BLE001
+        pass
+    if not D:
+        per_new(D, now_key)
+        per_save(D)
+    opts = sorted(D, reverse=True)
+    pend = st.session_state.pop("sal_sel_pending", None)
+    top = st.columns([1.3, 1.1, 1.1])
+    sel = top[0].selectbox("Kỳ lương (theo tháng)", opts + ["➕ Tạo kỳ mới"], index=opts.index(pend) if pend in opts else 0,
+                           format_func=lambda k: k if k.startswith("➕") else per_label(k) + (" 🔒" if D[k].get("locked") else ""))
+    if sel.startswith("➕"):
+        nk = top[1].text_input("Tháng mới (YYYY-MM)", now_key, key="sal_new_key")
+        src = top[2].selectbox("Sao chép từ kỳ", ["(mặc định)"] + opts, format_func=lambda k: k if k.startswith("(") else per_label(k), key="sal_new_src")
+        st.caption("Kỳ mới sao chép danh sách nhân sự, phân công cửa hàng và đơn giá của kỳ nguồn (số tiền chuyển khoản đặt lại 0); sau đó bạn cập nhật các thay đổi trong tháng.")
+        if st.button("Tạo kỳ lương", type="primary", key="sal_new_btn"):
+            if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", nk.strip()):
+                st.error("Tháng phải có dạng YYYY-MM, ví dụ 2026-11.")
+            elif nk.strip() in D:
+                st.error("Kỳ này đã tồn tại.")
+            else:
+                per_new(D, nk.strip(), None if src.startswith("(") else src)
+                per_save(D)
+                st.session_state["sal_sel_pending"] = nk.strip()
+                st.rerun()
+        return
+    PD = D[sel]
+    locked = bool(PD.get("locked"))
+    period = per_label(sel)
+    cfg = sal_merge(PD.get("config"))
+    K = lambda n: f"{n}_{sel}"  # noqa: E731
+    rounds = salary_rounds()
+    if not rounds:
+        st.info("Chưa có dữ liệu raw. Nạp file raw Lần 1 và Lần 2 ở thanh bên trái để tính lương.")
+        return
+    miss = [lb for lb in ("Lần 1", "Lần 2") if lb not in rounds]
+    if miss and not locked:
+        st.warning(f"Chưa nạp raw {', '.join(miss)}: lương chỉ tính trên dữ liệu đã nạp ({', '.join(rounds)}).")
+    rejects = salary_rejects(rounds)
+    leads_all = sorted({x for P in rounds.values() for x in P["Lead"].unique() if x} | set(PD.get("store_lead", {}).values()))
+
+    def tr_(x):
+        return f"{x / 1e6:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " tr"
+
+    if locked:
+        res = PD.get("result") or {}
+        st.success(f"🔒 {period} đã chốt lúc {fmt_ts(PD.get('locked_at', ''))}. Số liệu dưới đây là bản chốt, không đổi khi raw cập nhật.")
+        bylead = pd.DataFrame(res.get("bylead", []))
+        rows = pd.DataFrame(res.get("rows", []))
+        upay = pd.DataFrame(res.get("units", []))
+        ros = pd.DataFrame(res.get("roster", []), columns=ROSTER_COLS)
+        cfg = sal_merge(res.get("cfg") or PD.get("config"))
+        if bylead.empty:
+            st.warning("Bản chốt không có dữ liệu.")
+        else:
+            tot = float(bylead["TỔNG LƯƠNG"].sum())
+            st.markdown('<div class="kpi-row compact">' + "".join([kpi_card("Tổng lương", tr_(tot), vnd(tot) + " đ"),
+                        kpi_card("Lương thực hiện", tr_(bylead["Lương thực hiện"].sum()), vnd(bylead["Lương thực hiện"].sum()) + " đ"),
+                        kpi_card("Hỗ trợ Lead", tr_(bylead["Hỗ trợ Lead"].sum()), vnd(bylead["Hỗ trợ Lead"].sum()) + " đ")]) + "</div>", unsafe_allow_html=True)
+            d_ = bylead.copy()
+            for c in ["Lương thực hiện", "Hỗ trợ Lead", "Trừ admin hỗ trợ up hình", "Trừ từ chối/bổ sung", "TỔNG LƯƠNG"]:
+                d_[c] = d_[c].map(vnd)
+            if not cfg.get("campus_on", True) and "Campus" in d_.columns:
+                d_ = d_.drop(columns="Campus")
+            show_df(d_)
+            if not ros.empty:
+                show_df(ros, height=260)
+            st.download_button("📥 Xuất Excel kỳ đã chốt", data=salary_excel(period, rows, bylead, upay, ros, cfg, pd.DataFrame(res.get("qc", []))),
+                               file_name=f"bang_luong_{sel}_da_chot.xlsx", mime=XLSX_MIME, key=K("sal_dl_locked"))
+        if st.button("🔓 Mở khóa kỳ để chỉnh sửa", key=K("sal_unlock")):
+            PD["locked"] = False
+            per_save(D)
+            st.rerun()
+        return
+
+    bchoice = st.radio("Tính lương theo", ["QC đã duyệt (chuẩn)", "Field đã up (gồm cả plan chờ QC, để dự kiến)"], horizontal=True,
+                       index=0 if cfg.get("basis", "qc") == "qc" else 1, key=K("sal_basis"))
+    cfg["basis"], cfg["period"] = ("qc" if bchoice.startswith("QC") else "up"), period
+    camp_on = st.checkbox("Kỳ này có CAMPUS (chỉ tháng có cơ sở CAMPUS; từ 12/2026 mặc định tắt)", bool(cfg.get("campus_on", True)), key=K("sal_campus_on"))
+    cfg["campus_on"] = camp_on
+    if bool((PD.get("config") or {}).get("campus_on", True)) != camp_on:  # lưu ngay lựa chọn này cho kỳ
+        PD.setdefault("config", {})["campus_on"] = camp_on
+        per_save(D)
+    if not camp_on:
+        st.caption("Kỳ này không có CAMPUS: bảng lương không tính CAMPUS và chi phí QC Campus.")
+
+    with st.expander("⚙️ Cơ chế và đơn giá của kỳ này (theo bảng lương Field Lead)", expanded=False):
+        st.caption("Mặc định theo bảng lương tháng 4/2026. Mỗi kỳ có bộ đơn giá riêng: sửa rồi bấm Lưu cơ chế.")
+        a = st.columns(4)
+        cfg["trade_hi"] = a[0].number_input("Visit Trade – Hà Nội/HCM/Bình Dương", 0, 5_000_000, int(cfg["trade_hi"]), 10_000, key=K("sal_trade_hi"))
+        cfg["trade_lo"] = a[1].number_input("Visit Trade – tỉnh khác", 0, 5_000_000, int(cfg["trade_lo"]), 10_000, key=K("sal_trade_lo"))
+        cfg["plus_cps"] = a[2].number_input("Visit Plus – CPS", 0, 5_000_000, int(cfg["plus_cps"]), 5_000, key=K("sal_plus_cps"))
+        cfg["plus_dtv"] = a[3].number_input("Visit Plus – DTV", 0, 5_000_000, int(cfg["plus_dtv"]), 5_000, key=K("sal_plus_dtv"))
+        b = st.columns(4)
+        cfg["myst"] = b[0].number_input("Visit Khách hàng bí mật", 0, 5_000_000, int(cfg["myst"]), 10_000, key=K("sal_myst"))
+        cfg["photo"] = b[1].number_input("Trừ admin hỗ trợ up hình (mỗi mục)", 0, 1_000_000, int(cfg["photo"]), 5_000, key=K("sal_photo"))
+        cfg["reject"] = b[2].number_input("Trừ từ chối/bổ sung (mỗi plan)", 0, 1_000_000, int(cfg["reject"]), 5_000, key=K("sal_reject"))
+        if camp_on:
+            cfg["campus"] = b[3].number_input("CAMPUS (mỗi cơ sở hoàn thành)", 0, 10_000_000, int(cfg["campus"]), 50_000, key=K("sal_campus"))
+        d = st.columns(4)
+        cfg["sup_trade"] = d[0].number_input("Hỗ trợ Lead – Trade", 0, 1_000_000, int(cfg["sup_trade"]), 5_000, key=K("sal_sup_trade"))
+        cfg["sup_plus_cps"] = d[1].number_input("Hỗ trợ Lead – Plus CPS", 0, 1_000_000, int(cfg["sup_plus_cps"]), 1_000, key=K("sal_sup_pc"))
+        cfg["sup_plus_dtv"] = d[2].number_input("Hỗ trợ Lead – Plus DTV", 0, 1_000_000, int(cfg["sup_plus_dtv"]), 1_000, key=K("sal_sup_pd"))
+        cfg["sup_myst"] = d[3].number_input("Hỗ trợ Lead – Mystery", 0, 1_000_000, int(cfg["sup_myst"]), 5_000, key=K("sal_sup_my"))
+        if camp_on:
+            e_ = st.columns(2)
+            cfg["sup_campus"] = e_[0].number_input("Hỗ trợ Lead – CAMPUS (mỗi cơ sở)", 0, 1_000_000, int(cfg["sup_campus"]), 5_000, key=K("sal_sup_camp"))
+            cfg["qc_campus"] = e_[1].number_input("QC Campus (mỗi cơ sở, chi phí QC riêng)", 0, 1_000_000, int(cfg["qc_campus"]), 5_000, key=K("sal_qc_camp"))
+        cfg["no_support_leads"] = st.multiselect("Lead không nhận hỗ trợ Lead", leads_all,
+                                                 default=[x for x in cfg["no_support_leads"] if x in leads_all], key=K("sal_nosup"))
+        st.markdown("**Lượt tính lương mỗi cửa hàng theo đợt** (mỗi ô là 1 lượt khi cửa hàng hoàn thành hạng mục đó trong đợt)")
+        cats = [("Trade", "Trade Audit CPS (đủ hạng mục)"), ("DTV", "Điện thoại vui (Trade DTV)"), ("Plus", "Trade Audit Plus (đủ số bài tối thiểu)"),
+                ("Mystery", "Khách hàng bí mật")] + ([("Campus", "CAMPUS (cơ sở hoàn thành)")] if camp_on else [])
+        mt = st.columns(len(cats))
+        for col_, (k, lab) in zip(mt, cats):
+            with col_:
+                st.caption(lab)
+                cfg["count"][k]["L1"] = st.checkbox("Lần 1", bool(cfg["count"][k]["L1"]), key=K(f"sal_c_{k}_1"))
+                cfg["count"][k]["L2"] = st.checkbox("Lần 2", bool(cfg["count"][k]["L2"]), key=K(f"sal_c_{k}_2"))
+        st.markdown("**Theo từng Lead:** số mục Admin hỗ trợ up hình (trừ lương) và số plan từ chối/bổ sung (mặc định tự động từ hệ thống, sửa tay nếu cần)")
+        for ld in leads_all:
+            x1, x2 = st.columns(2)
+            cfg["photo_counts"][ld] = x1.number_input(f"{ld} – mục admin hỗ trợ up hình", 0, 100_000, int(cfg["photo_counts"].get(ld, 0) or 0), 1, key=K(f"sal_ph_{ld}"))
+            auto = int(rejects.get(ld, 0))
+            v = x2.number_input(f"{ld} – plan từ chối/bổ sung (tự động: {auto})", 0, 100_000, int(cfg["reject_override"].get(ld, auto) or 0), 1, key=K(f"sal_rj_{ld}"))
+            if v != auto:
+                cfg["reject_override"][ld] = int(v)
+            else:
+                cfg["reject_override"].pop(ld, None)
+        if st.button("💾 Lưu cơ chế của kỳ", key=K("sal_save"), type="primary"):
+            PD["config"] = cfg
+            per_save(D)
+            st.success(f"Đã lưu cơ chế {period}.")
+
+    units = salary_store_units(rounds, cfg)
+    units["Lead gốc"] = units["Lead"]
+    sl, ss = PD.get("store_lead", {}), PD.get("staff_store", {})
+    units["Lead"] = units["store"].map(sl).fillna(units["Lead"])
+    units["Nhân sự phụ trách"] = units["store"].map(ss).fillna("")
+    upay = salary_store_pay(units, cfg)
+    rows = salary_rows(upay, cfg)
+    if rows.empty:
+        st.info("Chưa có lượt nào đủ điều kiện tính lương theo cơ chế hiện tại (cần cửa hàng hoàn thành). Thử chọn 'Field đã up' để xem dự kiến.")
+        return
+    bylead = salary_by_lead(rows, rejects, cfg)
+    cfg_up = {**cfg, "basis": "up"} if cfg["basis"] == "qc" else cfg
+    u_up = salary_store_units(rounds, cfg_up)
+    u_up["Lead"] = u_up["store"].map(sl).fillna(u_up["Lead"])
+    total_up = float(salary_by_lead(salary_rows(u_up, cfg_up), rejects, cfg_up)["TỔNG LƯƠNG"].sum())
+    tot_now = float(bylead["TỔNG LƯƠNG"].sum())
+    cards = [kpi_card("Tổng lương", tr_(tot_now), vnd(tot_now) + " đ"),
+             kpi_card("Lương thực hiện", tr_(bylead["Lương thực hiện"].sum()), vnd(bylead["Lương thực hiện"].sum()) + " đ"),
+             kpi_card("Hỗ trợ Lead", tr_(bylead["Hỗ trợ Lead"].sum()), vnd(bylead["Hỗ trợ Lead"].sum()) + " đ"),
+             kpi_card("Trừ up hình + từ chối", tr_(bylead["Trừ admin hỗ trợ up hình"].sum() + bylead["Trừ từ chối/bổ sung"].sum()),
+                      vnd(bylead["Trừ admin hỗ trợ up hình"].sum() + bylead["Trừ từ chối/bổ sung"].sum()) + " đ", None, bad=True),
+             kpi_card("Nếu tính cả plan chờ QC", tr_(total_up), (f"+{vnd(total_up - tot_now)} đ so với hiện tại" if cfg["basis"] == "qc" else "đang tính theo Field đã up"))]
+    st.markdown('<div class="kpi-row compact">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+    st.caption(f"{period} · tính theo **{'QC đã duyệt' if cfg['basis'] == 'qc' else 'Field đã up'}** · "
+               "Lương Lead = Lương thực hiện + Hỗ trợ Lead − Admin hỗ trợ up hình − Từ chối/bổ sung.")
+
+    section("Lương theo Field Lead", "Mỗi Lead = tổng các dòng Hệ thống × Tỉnh của Lead đó, theo phân công cửa hàng của kỳ này")
+    roster = pd.DataFrame(PD.get("roster", []), columns=ROSTER_COLS)
+    roster = _clean_roster(roster) if len(roster) else roster.astype({"Số tiền chuyển khoản": int})
+    mem = roster.groupby("Field Lead")["Họ tên"].agg(list).to_dict() if not roster.empty else {}
+    bl = bylead.copy()
+    bl["Nhân sự trong team"] = bl["Lead"].map(lambda l: len(mem.get(l, [])))
+    disp = bl.copy()
+    for c in ["Lương thực hiện", "Hỗ trợ Lead", "Trừ admin hỗ trợ up hình", "Trừ từ chối/bổ sung", "TỔNG LƯƠNG"]:
+        disp[c] = disp[c].map(vnd)
+    cols_bl = ["Lead", "Tên trong bảng lương", "Số cửa hàng được tính", "Trade Audit", "Trade Audit Plus", "Khách hàng bí mật"] + (["Campus"] if camp_on else []) + \
+              ["Lương thực hiện", "Hỗ trợ Lead", "Plan từ chối/bổ sung", "Trừ từ chối/bổ sung", "Số mục admin hỗ trợ up hình", "Trừ admin hỗ trợ up hình", "TỔNG LƯƠNG",
+               "Nhân sự trong team"]
+    show_df(disp[cols_bl])
+    fig = px.bar(bylead, x="Lead", y=["Lương thực hiện", "Hỗ trợ Lead"], barmode="stack", title="Cấu phần lương theo Lead (đ)", text_auto=".3s",
+                 color_discrete_sequence=["#d70018", "#7a5af8"])
+    show_chart(fig)
+
+    section("Chi tiết theo Hệ thống × Tỉnh", "Giống sheet 'Bang luong' của bảng lương")
+    rd = rows.copy()
+    for c in ["Cost visit Trade", "Cost visit Plus", "Cost visit Mystery", "Cost Campus", "Lương thực hiện", "Hỗ trợ Lead"]:
+        rd[c] = rd[c].map(vnd)
+    if not camp_on:
+        rd = rd.drop(columns=[c for c in ("Campus", "Cost Campus") if c in rd.columns])
+    show_df(rd, height=300)
+    qc_df = salary_qc_campus(rounds, cfg)
+    if not qc_df.empty:
+        section("Chi phí QC Campus (riêng, không cộng vào lương Lead)", f"{vnd(cfg['qc_campus'])} đ / cơ sở CAMPUS đã QC xong, chia cho QC viên theo số plan đã duyệt")
+        qd = qc_df.copy()
+        qd["Chi phí QC Campus"] = qd["Chi phí QC Campus"].map(vnd)
+        show_df(qd, height=180)
+        st.caption(f"Tổng chi phí QC Campus: **{vnd(qc_df['Chi phí QC Campus'].sum())} đ**")
+
+    section("Phân công cửa hàng theo kỳ", "Cập nhật hằng tháng: cửa hàng thuộc Lead nào và do nhân sự nào phụ trách. Có hiệu lực cho kỳ này.")
+    st.caption(f"Kỳ này có {len(sl)} cửa hàng đổi Lead và {len(ss)} cửa hàng đã gán nhân sự phụ trách (so với danh sách cửa hàng gốc).")
+    f1, f2, f3 = st.columns([1, 1, 2])
+    flt_lead = f1.selectbox("Lọc theo Lead (kỳ này)", ["Tất cả"] + leads_all, key=K("sal_as_lead"))
+    flt_prov = f2.selectbox("Lọc theo tỉnh nhóm", ["Tất cả", "Hà Nội", "Hồ Chí Minh", "Bình Dương", "Others"], key=K("sal_as_prov"))
+    flt_q = f3.text_input("🔎 Mã cửa hàng (dán nhiều mã được)", key=K("sal_as_q"))
+    au = upay if flt_lead == "Tất cả" else upay[upay["Lead"] == flt_lead]
+    au = au if flt_prov == "Tất cả" else au[au["Province"] == flt_prov]
+    au = token_filter(au, ["store"], flt_q)
+    members = sorted(set(roster["Họ tên"])) if not roster.empty else []
+    view = pd.DataFrame({"Mã cửa hàng": au["store"], "Hệ thống": au["Hệ thống"], "Tỉnh (nhóm)": au["Province"], "Lead (kỳ này)": au["Lead"],
+                         "Lead gốc": au["Lead gốc"], "Nhân sự phụ trách": au["Nhân sự phụ trách"], "Lượt tính lương": au["Lượt"],
+                         "Lương cửa hàng": au["Lương cửa hàng"].map(vnd)})
+    show_df(view, height=260)
+    p1, p2 = st.columns(2)
+    pick = p1.multiselect(f"Chọn cửa hàng ({len(au)} đang lọc)", au["store"].tolist(), key=K("sal_as_pick"))
+    tl = p2.selectbox("Gán về Lead", ["— giữ nguyên —"] + leads_all, key=K("sal_as_tl"))
+    tm = p2.selectbox("Gán nhân sự phụ trách", ["— giữ nguyên —", "(bỏ phân công)"] + members, key=K("sal_as_tm"))
+    if st.button(f"➡️ Áp dụng cho {len(pick)} cửa hàng", disabled=not pick or (tl.startswith("—") and tm.startswith("—")), type="primary", key=K("sal_as_btn")):
+        for s_ in pick:
+            if not tl.startswith("—"):
+                PD.setdefault("store_lead", {})[s_] = tl
+            if tm == "(bỏ phân công)":
+                PD.setdefault("staff_store", {}).pop(s_, None)
+            elif not tm.startswith("—"):
+                PD.setdefault("staff_store", {})[s_] = tm
+        per_save(D)
+        st.rerun()
+    cu1, cu2 = st.columns([1, 1])
+    tmpl = pd.DataFrame({"Mã cửa hàng": upay["store"], "Lead": upay["Lead"], "Nhân sự phụ trách": upay["Nhân sự phụ trách"]})
+    cu1.download_button("📥 Tải file phân công của kỳ (Excel) để cập nhật offline", data=to_excel_multi({"Phan cong": tmpl}),
+                        file_name=f"phan_cong_{sel}.xlsx", mime=XLSX_MIME, key=K("sal_as_dl"))
+    upa = cu2.file_uploader("Nạp file phân công (Excel/CSV: Mã cửa hàng, Lead, Nhân sự phụ trách)", type=["xlsx", "csv"], key=K("sal_as_up"))
+    if upa is not None and st.session_state.get(K("_as_done")) != (upa.name, upa.size):
+        try:
+            pa = parse_assign_file(upa.name, upa.getvalue())
+            known = set(upay["store"])
+            n_new = 0
+            for _, r_ in pa.iterrows():
+                if r_["store"] not in known:
+                    continue
+                if r_["lead"]:
+                    PD.setdefault("store_lead", {})[r_["store"]] = r_["lead"]
+                if r_["staff"]:
+                    PD.setdefault("staff_store", {})[r_["store"]] = r_["staff"]
+                n_new += 1
+            per_save(D)
+            st.session_state[K("_as_done")] = (upa.name, upa.size)
+            st.success(f"Đã cập nhật phân công cho {n_new} cửa hàng ({len(pa) - n_new} mã không có trong dữ liệu đã bỏ qua).")
+            st.rerun()
+        except Exception as e:  # noqa: BLE001
+            st.error(f"Không đọc được file: {e}")
+
+    section("Nhân sự theo từng team Lead và chuyển khoản", "Danh sách nhân sự của kỳ này (thay đổi theo tháng); nhân sự gắn với cửa hàng họ phụ trách")
+    upx = st.file_uploader("Nạp danh sách nhân sự từ file bảng lương (.xlsx, sheet 'Chuyen khoan')", type=["xlsx"], key=K("sal_roster_up"))
+    if upx is not None and st.session_state.get(K("_roster_done")) != (upx.name, upx.size):
+        try:
+            new_r = roster_from_xlsx(upx.getvalue())
+            PD["roster"] = new_r.to_dict("records")
+            per_save(D)
+            st.session_state[K("_roster_done")] = (upx.name, upx.size)
+            st.success(f"Đã nạp {len(new_r)} nhân sự cho {period} (chỉ lấy họ tên và Lead, không lấy CCCD / tài khoản ngân hàng).")
+            st.rerun()
+        except Exception as e:  # noqa: BLE001
+            st.error(f"Không đọc được file: {e}")
+    opts_l = sorted(set(leads_all) | set(roster["Field Lead"]))
+    ed = st.data_editor(roster, num_rows="dynamic", hide_index=True, height=300, key=K("sal_roster_ed"),
+                        column_config={"Field Lead": st.column_config.SelectboxColumn("Field Lead (team)", options=opts_l, required=True),
+                                       "Số tiền chuyển khoản": st.column_config.NumberColumn("Số tiền chuyển khoản", min_value=0, step=1000, format="%d"),
+                                       "Họ tên": st.column_config.TextColumn("Họ tên", required=True)})
+    cur = _clean_roster(ed)
+    r1, r2, r3 = st.columns([1, 1.5, 1.5])
+    if r1.button("💾 Lưu danh sách", key=K("sal_roster_save"), type="primary"):
+        PD["roster"] = cur.to_dict("records")
+        per_save(D)
+        st.success(f"Đã lưu danh sách nhân sự {period}.")
+    if r2.button("➗ Chia đều lương Lead cho team", key=K("sal_roster_split")):
+        c2 = cur.copy()
+        for _, rr in bylead.iterrows():
+            idx = c2.index[c2["Field Lead"] == rr["Lead"]]
+            if len(idx):
+                share = int(rr["TỔNG LƯƠNG"] // len(idx) // 1000 * 1000)
+                c2.loc[idx, "Số tiền chuyển khoản"] = share
+                c2.loc[idx[0], "Số tiền chuyển khoản"] += int(rr["TỔNG LƯƠNG"]) - share * len(idx)
+        PD["roster"] = c2.to_dict("records")
+        per_save(D)
+        st.rerun()
+    if r3.button("🏬 Chia theo cửa hàng phụ trách", key=K("sal_roster_bystore")):
+        PD["roster"] = split_by_stores(cur, bylead, upay).to_dict("records")
+        per_save(D)
+        st.rerun()
+    st.caption("'Chia theo cửa hàng phụ trách' chia tổng lương của Lead theo lương các cửa hàng từng người phụ trách (người chưa được gán cửa hàng nhận 0; chưa ai được gán thì chia đều).")
+    st_ = upay.groupby("Nhân sự phụ trách").agg(**{"Số cửa hàng phụ trách": ("store", "count"), "Lượt tính lương": ("Lượt", "sum"), "Lương cửa hàng": ("Lương cửa hàng", "sum")})
+    st_ = st_[st_.index != ""].reset_index().rename(columns={"Nhân sự phụ trách": "Họ tên"})
+    if not st_.empty:
+        sd = st_.copy()
+        sd["Lương cửa hàng"] = sd["Lương cửa hàng"].map(vnd)
+        show_df(sd, height=200)
+    alloc = cur.groupby("Field Lead")["Số tiền chuyển khoản"].agg(["count", "sum"]) if len(cur) else pd.DataFrame(columns=["count", "sum"])
+    rec = bylead[["Lead", "TỔNG LƯƠNG"]].merge(alloc, left_on="Lead", right_index=True, how="left").fillna({"count": 0, "sum": 0})
+    rec["Chênh lệch"] = rec["TỔNG LƯƠNG"] - rec["sum"]
+    rec["Đối chiếu"] = np.where((rec["count"] == 0), "⚠️ Chưa có nhân sự", np.where(rec["Chênh lệch"] == 0, "✅ Khớp", "⚠️ Lệch"))
+    rd2 = rec.rename(columns={"count": "Số nhân sự", "sum": "Đã phân bổ"}).copy()
+    for c in ["TỔNG LƯƠNG", "Đã phân bổ", "Chênh lệch"]:
+        rd2[c] = rd2[c].map(vnd)
+    show_df(rd2, height=200)
+
+    section("Chốt kỳ và xuất file")
+    x1, x2, x3 = st.columns(3)
+    x1.download_button("📥 Xuất Excel – bảng lương, tổng hợp, cửa hàng, chuyển khoản", data=salary_excel(period, rows, bylead, upay, cur, cfg, qc_df),
+                       file_name=f"bang_luong_{sel}_{stamp()}.xlsx", mime=XLSX_MIME, key=K("sal_dl"))
+    if x2.button("🔒 Chốt kỳ lương", key=K("sal_lock"), help="Lưu bản chốt: số liệu kỳ này không đổi khi raw hay đơn giá thay đổi sau này"):
+        PD["config"] = cfg
+        PD["roster"] = cur.to_dict("records")
+        PD["result"] = {"bylead": json.loads(bylead.to_json(orient="records", force_ascii=False)), "rows": json.loads(rows.to_json(orient="records", force_ascii=False)),
+                        "units": json.loads(upay.to_json(orient="records", force_ascii=False)), "roster": cur.to_dict("records"), "cfg": cfg,
+                        "qc": json.loads(qc_df.to_json(orient="records", force_ascii=False))}
+        PD["locked"], PD["locked_at"] = True, _now_iso()
+        per_save(D)
+        st.rerun()
+    x3.download_button("📥 Tải salary_periods.json (lưu lên GitHub)", data=json.dumps(D, ensure_ascii=False).encode("utf-8"),
+                       file_name="salary_periods.json", mime="application/json", key=K("sal_per_dl"))
+    st.caption("Dữ liệu các kỳ lương lưu trên máy chủ nên mất khi app khởi động lại: tải salary_periods.json rồi upload lên GitHub (cùng thư mục app.py) để giữ lâu dài. "
+               "File này chứa họ tên và số tiền chuyển khoản, chỉ để trong repo Private.")
+
+
+# =====================================================================
 # Main
 # =====================================================================
 def analyze(P, label, scope=None):
@@ -4067,6 +4804,7 @@ def render_round(file_bytes, fname, label):
     if IS_ADMIN:
         plan += [("🧭 Phân luồng Lead", lambda: safe(tab_routing, P, unres)),
                  ("📈 Hiệu suất QC", lambda: safe(tab_qc, P)),
+                 ("💰 Lương", lambda: safe(tab_salary)),
                  ("🧪 Kiểm tra dữ liệu", lambda: safe(tab_validation, P, bundle, label)),
                  ("🔐 Tài khoản", lambda: safe(tab_accounts, P))]
     for tb, (_, fn) in zip(st.tabs([p[0] for p in plan]), plan):
