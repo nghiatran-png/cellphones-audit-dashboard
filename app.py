@@ -1759,7 +1759,9 @@ def emergency_reset():
     DATA_DIR.mkdir(exist_ok=True)
     marker.write_text(sig)
 
-
+[emergency]
+email = "nghia.tran@fieldman.vn"
+new_password = "MatKhauMoi2026"
 emergency_reset()
 AUTH_ON = True  # luôn bật đăng nhập (không còn chế độ mở)
 if AUTH_ON:
