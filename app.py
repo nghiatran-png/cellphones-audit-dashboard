@@ -1733,7 +1733,34 @@ def login_screen():
                     st.success("Đã đặt mật khẩu mới. Quay lại tab 'Đăng nhập' để vào hệ thống.")
         st.caption("Cần hỗ trợ thêm: liên hệ quản trị dashboard.")
 
+def emergency_reset():
+    """Đặt lại mật khẩu bằng Streamlit Secrets [emergency]. Dùng xong phải xóa khỏi Secrets."""
+    try:
+        c = st.secrets.get("emergency", None)
+    except Exception:  # noqa: BLE001
+        return
+    if not c or not c.get("email") or not c.get("new_password"):
+        return
+    key, pw = str(c["email"]).strip().lower(), str(c["new_password"])
+    if check_password_rules(pw, pw):
+        return
+    sig = hashlib.sha256((key + pw).encode()).hexdigest()
+    marker = DATA_DIR / ".emergency_done"
+    if marker.exists() and marker.read_text() == sig:
+        return
+    users = load_users(users_signature()).reset_index(drop=True)
+    idx = users.index[users["key"] == key]
+    if len(idx) == 0:
+        return
+    salt = secrets.token_hex(16)
+    users.loc[idx[0], "salt"], users.loc[idx[0], "hash"] = salt, hash_pw(pw, salt)
+    users.loc[idx[0], "active"] = "1"
+    save_users(users)
+    DATA_DIR.mkdir(exist_ok=True)
+    marker.write_text(sig)
 
+
+emergency_reset()
 AUTH_ON = True  # luôn bật đăng nhập (không còn chế độ mở)
 if AUTH_ON:
     USER = st.session_state.get("user")
