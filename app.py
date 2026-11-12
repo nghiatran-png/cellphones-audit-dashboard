@@ -1760,9 +1760,10 @@ def emergency_reset():
     marker.write_text(sig)
 
 [emergency]
-email = "nghia.tran@fieldman.vn"
-new_password = "MatKhauMoi2026"
-emergency_reset()
+users.loc[idx[0], "active"] = "1"
+    save_users(users)
+    DATA_DIR.mkdir(exist_ok=True)
+    marker.write_text(sig)
 AUTH_ON = True  # luôn bật đăng nhập (không còn chế độ mở)
 if AUTH_ON:
     USER = st.session_state.get("user")
