@@ -1733,6 +1733,7 @@ def login_screen():
                     st.success("Đã đặt mật khẩu mới. Quay lại tab 'Đăng nhập' để vào hệ thống.")
         st.caption("Cần hỗ trợ thêm: liên hệ quản trị dashboard.")
 
+
 def emergency_reset():
     """Đặt lại mật khẩu bằng Streamlit Secrets [emergency]. Dùng xong phải xóa khỏi Secrets."""
     try:
@@ -1759,11 +1760,9 @@ def emergency_reset():
     DATA_DIR.mkdir(exist_ok=True)
     marker.write_text(sig)
 
-[emergency]
-users.loc[idx[0], "active"] = "1"
-    save_users(users)
-    DATA_DIR.mkdir(exist_ok=True)
-    marker.write_text(sig)
+
+# Cấu hình [emergency] đặt trong Streamlit Secrets (Manage app → Settings → Secrets), KHÔNG viết vào file này.
+emergency_reset()
 AUTH_ON = True  # luôn bật đăng nhập (không còn chế độ mở)
 if AUTH_ON:
     USER = st.session_state.get("user")
@@ -3464,8 +3463,6 @@ def field_home(P, P_all, IV, label):
                                   "Mã cửa hàng": d["store_code"], "Plus": d["plus_item"], "Điểm": d["score"],
                                   "Điểm tối đa": d["max_score"], "% điểm": d["pct"], "Kết luận": d["Kết luận"]}).sort_values("% điểm"),
                     height=420, column_config={"% điểm": st.column_config.NumberColumn(format="%.1f%%")})
-
-
 
 
 def tab_accounts(P):
